@@ -1,0 +1,17 @@
+[Unit]
+Description=Alpaca Paper Trading Bot
+After=network.target
+
+[Service]
+Type=simple
+User=trader
+WorkingDirectory=/home/trader/trading-bot
+EnvironmentFile=/home/trader/trading-bot/.env
+ExecStart=/home/trader/.local/bin/uv run python bot.py
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/trader/trading-bot/logs/bot.log
+StandardError=append:/home/trader/trading-bot/logs/bot.log
+
+[Install]
+WantedBy=multi-user.target
