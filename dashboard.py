@@ -67,12 +67,38 @@ if not _check_login():
 # ── CSS ───────────────────────────────────────────────────────────────────────
 
 st.markdown("""<style>
+/* ── Hide Streamlit chrome ── */
+header[data-testid="stHeader"] { display:none !important; }
+[data-testid="stToolbar"]       { display:none !important; }
 [data-testid="stSidebarCollapsedControl"] { display:none; }
-.block-container { max-width:100% !important; padding-top:0.5rem !important; padding-bottom:0.5rem !important; }
-hr { border-color:#1e3a5f !important; margin:0.4rem 0 !important; }
+
+/* ── Layout ── */
+.block-container { max-width:100% !important; padding:0.2rem 0.6rem 0.4rem !important; }
+hr { border-color:#1e3a5f !important; margin:0.25rem 0 !important; }
 [data-testid="stVerticalBlockBorderWrapper"] { border-radius:6px !important; }
-/* make metric label uppercase */
-[data-testid="stMetricLabel"] > div { text-transform:uppercase; font-size:0.65rem !important; letter-spacing:0.08em; }
+
+/* ── Metric sizing (–30%) ── */
+[data-testid="stMetricLabel"] > div { text-transform:uppercase; font-size:0.55rem !important; letter-spacing:0.07em; }
+[data-testid="stMetricValue"]       { font-size:0.95rem !important; }
+[data-testid="stMetricDelta"]       { font-size:0.58rem !important; }
+
+/* ── Mobile nav (hidden on desktop) ── */
+.kc-nav { display:none; }
+@media (max-width:768px) {
+  .kc-nav {
+    display:flex; overflow-x:auto; gap:5px; padding:5px 2px 6px;
+    background:#0d1526; border:1px solid #1e3a5f; border-radius:6px;
+    margin-bottom:6px; -webkit-overflow-scrolling:touch; scrollbar-width:none;
+  }
+  .kc-nav::-webkit-scrollbar { display:none; }
+  .kc-nav a {
+    color:#6b8bb0; text-decoration:none; font-size:0.68rem;
+    padding:4px 10px; border-radius:4px; border:1px solid #1e3a5f;
+    flex-shrink:0; white-space:nowrap;
+  }
+  .kc-nav a:active { color:#00d4aa; border-color:#00d4aa; }
+  .block-container { padding-bottom:10px !important; }
+}
 </style>""", unsafe_allow_html=True)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -361,6 +387,16 @@ with right_hdr:
 # ── ACCOUNT METRICS ───────────────────────────────────────────────────────────
 
 st.divider()
+st.markdown("""<div class="kc-nav">
+  <a href="#equity">📈 Equity</a>
+  <a href="#trades">📊 Trades</a>
+  <a href="#positions">💼 Positions</a>
+  <a href="#server">🖥 Server</a>
+  <a href="#logs">📋 Logs</a>
+  <a href="#backtest">🔬 Backtest</a>
+  <a href="#manual">✋ Manual</a>
+  <a href="#config">⚙️ Config</a>
+</div>""", unsafe_allow_html=True)
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("Portfolio Balance",  f"${eq:,.2f}")
 m2.metric("Cash Available",     f"${cash:,.2f}")
@@ -374,6 +410,7 @@ main_left, main_right = st.columns([3, 2], gap="medium")
 
 with main_left:
     # ── Portfolio Equity ──────────────────────────────────────────────────────
+    st.markdown('<div id="equity"></div>', unsafe_allow_html=True)
     with st.container(border=True):
         _panel_header("Portfolio Equity", """
 **How to use:**
@@ -394,12 +431,13 @@ with main_left:
         period_map = {"1W":"1W","1M":"1M","3M":"3M","1Y":"1A"}
         ph = _demo_ph() if DEMO else _portfolio_history(period_map[period_key])
         if ph is not None:
-            st.plotly_chart(_equity_fig(ph, trades, overlay_strats, height=200),
+            st.plotly_chart(_equity_fig(ph, trades, overlay_strats, height=140),
                             use_container_width=True, config=_NO_TB)
         else:
             st.info("No portfolio history available yet.")
 
     # ── Trade Activity ────────────────────────────────────────────────────────
+    st.markdown('<div id="trades"></div>', unsafe_allow_html=True)
     with st.container(border=True):
         all_strats = sorted({t.get("strategy","?") for t in trades} if trades else [])
         buys  = sum(1 for t in trades if t.get("side") == "buy")  if trades else 0
@@ -413,11 +451,12 @@ with main_left:
         filt = st.multiselect("Filter by strategy", all_strats, default=all_strats,
                               label_visibility="collapsed",
                               placeholder="All strategies shown")
-        st.plotly_chart(_trades_fig(trades, filt or None, height=170),
+        st.plotly_chart(_trades_fig(trades, filt or None, height=120),
                         use_container_width=True, config=_NO_TB)
 
 with main_right:
     # ── Open Positions ────────────────────────────────────────────────────────
+    st.markdown('<div id="positions"></div>', unsafe_allow_html=True)
     with st.container(border=True):
         _panel_header("Open Positions", """
 **How to use:**
@@ -436,7 +475,7 @@ with main_right:
                     df_p.style
                         .format({"Price":"${:.2f}","P&L ($)":"${:+,.2f}","P&L (%)":"{:+.2f}%"})
                         .map(_num_style, subset=["P&L ($)","P&L (%)"]),
-                    use_container_width=True, hide_index=True, height=165)
+                    use_container_width=True, hide_index=True, height=115)
             else:
                 st.caption("No live positions. Showing illustrative sample:")
                 df_p = pd.DataFrame(_SAMPLE_POSITIONS)
@@ -444,11 +483,12 @@ with main_right:
                     df_p.style
                         .format({"Price":"${:.2f}","P&L ($)":"${:+,.2f}","P&L (%)":"{:+.2f}%"})
                         .map(_num_style, subset=["P&L ($)","P&L (%)"]),
-                    use_container_width=True, hide_index=True, height=135)
+                    use_container_width=True, hide_index=True, height=95)
         except Exception as e:
             st.error(str(e))
 
     # ── Server + Safety ───────────────────────────────────────────────────────
+    st.markdown('<div id="server"></div>', unsafe_allow_html=True)
     with st.container(border=True):
         srv_c, saf_c = st.columns([3, 2])
         with srv_c:
@@ -472,11 +512,12 @@ with main_right:
             if events:
                 sdf = pd.DataFrame(events)
                 cols = [c for c in ["timestamp","event"] if c in sdf.columns]
-                st.dataframe(sdf[cols], use_container_width=True, hide_index=True, height=100)
+                st.dataframe(sdf[cols], use_container_width=True, hide_index=True, height=70)
             else:
                 st.success("No safety events")
 
     # ── Bot Logs ──────────────────────────────────────────────────────────────
+    st.markdown('<div id="logs"></div>', unsafe_allow_html=True)
     with st.container(border=True):
         _panel_header("Bot Logs", """
 **How to read:**
@@ -490,7 +531,7 @@ with main_right:
                     "WARN": "color:#ffa500",
                     "INFO": "color:#6b8bb0"}
             st.dataframe(df_l.style.map(lambda v: LS.get(v,""), subset=["level"]),
-                         use_container_width=True, hide_index=True, height=120)
+                         use_container_width=True, hide_index=True, height=85)
         else:
             st.caption("No log entries yet.")
 
@@ -501,6 +542,7 @@ bt_col, cfg_col = st.columns([2, 3], gap="medium")
 
 # ── Backtest Engine ───────────────────────────────────────────────────────────
 with bt_col:
+    st.markdown('<div id="backtest"></div>', unsafe_allow_html=True)
     with st.container(border=True):
         _panel_header("Backtest Engine", """
 **How to use:**
@@ -579,11 +621,12 @@ with bt_col:
                     fig_bt.add_hline(
                         y=st.session_state["bt"]["metrics"]["starting_capital"],
                         line=dict(color="#444", width=1, dash="dot"))
-                    fig_bt.update_layout(**_CHART, height=160)
+                    fig_bt.update_layout(**_CHART, height=110)
                     fig_bt.update_yaxes(tickprefix="$", tickformat=",.0f")
                     st.plotly_chart(fig_bt, use_container_width=True, config=_NO_TB)
 
     # ── Manual Trade (No Strategy) ────────────────────────────────────────────
+    st.markdown('<div id="manual"></div>', unsafe_allow_html=True)
     with st.container(border=True):
         _panel_header("Manual Trade — No Strategy", """
 **How to use:**
@@ -623,6 +666,7 @@ with bt_col:
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 with cfg_col:
+    st.markdown('<div id="config"></div>', unsafe_allow_html=True)
     with st.container(border=True):
         _panel_header("Configuration", """
 **How to use:**
