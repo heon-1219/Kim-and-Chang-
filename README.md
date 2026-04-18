@@ -113,20 +113,18 @@ sudo systemctl restart trading-dashboard
 
 ## Dashboard
 
-Accessible at **kctrading.xyz** (port 80). Single-page, no-scroll tactical layout.
+Accessible at **kctrading.xyz** (port 80). Bloomberg Terminal style — all panels visible simultaneously, no scroll.
 
-**Main page panels (always visible):**
-- Header + live status bar (bot alive/stale, trading on/off, active strategy, API usage, timestamp)
-- Account metrics: Equity, Cash, Buying Power, Today P&L
-- Portfolio equity chart (1W / 1M / 3M / 1Y from Alpaca portfolio history)
-- Server status: CPU, RAM, Disk, Uptime (via psutil)
+**Top row (always visible):**
+- Header — title, account metrics (EQ / CASH / BP / P&L), bot status, API usage, Refresh/Logout
+- Portfolio equity chart (1W / 1M / 3M / 1Y)
 - Open positions table with color-coded P&L
-- Recent trades + bot logs side by side
+- Server status (CPU / RAM / Disk / Uptime) + Safety events
 
-**Accessible via modal dialogs (bottom action bar):**
-- `▶ Backtest` — run any strategy on any symbol/date range, see equity curve with buy/sell markers
-- `⚙️ Config` — switch strategy, edit parameters, set risk limits
-- `🚨 Safety` — view safety events and kill switch status
+**Bottom row (always visible):**
+- Backtest Engine — run any strategy on any symbol/date range, results + equity curve inline
+- Configuration — kill switch, strategy selector, parameters, risk limits, Save
+- Recent trades + Bot logs
 
 For domain setup details, see `Instructions/DOMAIN.md`.
 
