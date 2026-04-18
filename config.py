@@ -11,6 +11,19 @@ DEFAULT_RSI_PERIOD = 14
 DEFAULT_RSI_OVERSOLD = 30
 DEFAULT_RSI_OVERBOUGHT = 70
 
+# MACD strategy defaults
+DEFAULT_MACD_FAST = 12
+DEFAULT_MACD_SLOW = 26
+DEFAULT_MACD_SIGNAL = 9
+
+# Bollinger Bands strategy defaults
+DEFAULT_BB_WINDOW = 20
+DEFAULT_BB_STD = 2.0
+
+# EMA Crossover strategy defaults
+DEFAULT_EMA_FAST = 9
+DEFAULT_EMA_SLOW = 21
+
 # Position sizing
 DEFAULT_POSITION_PCT = 5.0       # % of equity per position
 DEFAULT_MAX_POSITIONS = 4
