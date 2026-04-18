@@ -16,6 +16,8 @@ import streamlit as st
 from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 
+import yfinance as yf
+
 import broker
 import db
 from backtest import run_backtest
@@ -59,6 +61,11 @@ def _check_login() -> bool:
                     st.rerun()
                 else:
                     st.error("Invalid credentials.")
+        st.markdown('<div style="height:6px;"></div>', unsafe_allow_html=True)
+        if st.button("👁  View as Guest", use_container_width=True, key="guest_btn"):
+            st.session_state.update({"authenticated": True, "demo": False,
+                                     "guest": True, "username": "guest"})
+            st.rerun()
     return False
 
 if not _check_login():
@@ -195,10 +202,10 @@ def _bar_html(label: str, pct: float, note: str = "") -> str:
         f'</div>'
     )
 
-@st.cache_data(ttl=300)
-def _portfolio_history(period: str = "1M") -> pd.DataFrame | None:
+@st.cache_data(ttl=60)
+def _portfolio_history(period: str = "1D", timeframe: str = "1D") -> pd.DataFrame | None:
     try:
-        ph = broker.get_portfolio_history(period=period, timeframe="1D")
+        ph = broker.get_portfolio_history(period=period, timeframe=timeframe)
         if not ph.timestamp:
             return None
         df = pd.DataFrame({"date": pd.to_datetime(ph.timestamp, unit="s"),
@@ -206,6 +213,37 @@ def _portfolio_history(period: str = "1M") -> pd.DataFrame | None:
         return df if not df.empty else None
     except Exception:
         return None
+
+@st.cache_data(ttl=30)
+def _stock_info(symbol: str) -> dict | None:
+    """Current price + 5-day 15-min history from yfinance. Returns None on bad ticker."""
+    try:
+        ticker = yf.Ticker(symbol)
+        hist = ticker.history(period="5d", interval="15m", auto_adjust=True)
+        if hist.empty:
+            return None
+        hist.index = pd.to_datetime([d.replace(tzinfo=None) for d in hist.index])
+        return {"price": float(hist["Close"].iloc[-1]), "hist": hist}
+    except Exception:
+        return None
+
+def _stock_mini_chart(hist: pd.DataFrame, height: int = 85) -> go.Figure:
+    """Compact sparkline chart — no axes, used in the manual trade panel."""
+    closes = hist["Close"]
+    up     = float(closes.iloc[-1]) >= float(closes.iloc[0])
+    clr    = "#00c896" if up else "#ff4b4b"
+    fill   = "rgba(0,200,150,0.07)" if up else "rgba(255,75,75,0.07)"
+    fig    = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=hist.index, y=closes, mode="lines", fill="tozeroy",
+        fillcolor=fill, line=dict(color=clr, width=1.5), showlegend=False,
+        hovertemplate="$%{y:.2f}<extra></extra>"))
+    fig.update_layout(
+        paper_bgcolor="#0a0e1a", plot_bgcolor="#111827",
+        margin=dict(l=0, r=0, t=2, b=0), height=height,
+        xaxis=dict(visible=False), yaxis=dict(visible=False),
+        showlegend=False, hovermode="x unified")
+    return fig
 
 def _equity_fig(df: pd.DataFrame, trades: list, show_strats: list[str],
                 height: int = 200) -> go.Figure:
@@ -279,7 +317,17 @@ def _trades_fig(trades: list, strategy_filter: list[str] | None,
 
 # ── Demo data ─────────────────────────────────────────────────────────────────
 
-DEMO = st.session_state.get("demo", False)
+DEMO  = st.session_state.get("demo",  False)
+GUEST = st.session_state.get("guest", False)
+
+_DEMO_STRAT_POS: dict[str, list[dict]] = {
+    "rsi":          [{"Symbol":"AAPL","Qty":10,"Price":178.91,"Value":1789.10},
+                     {"Symbol":"GOOGL","Qty":8,"Price":169.55,"Value":1356.40}],
+    "macd":         [{"Symbol":"MSFT","Qty":5,"Price":421.33,"Value":2106.65}],
+    "bollinger":    [],
+    "ema_crossover":[],
+    "manual":       [{"Symbol":"TSLA","Qty":2,"Price":242.10,"Value":484.20}],
+}
 
 def _demo_account():
     class _A:
@@ -387,11 +435,20 @@ with left_hdr:
 with right_hdr:
     u_col, r_col, l_col = st.columns([3, 1, 1])
     with u_col:
-        st.markdown(
-            f'<div style="display:flex;align-items:center;height:100%;">'
-            f'<span style="font-size:0.72rem;color:#6b8bb0;">Signed in as&nbsp;'
-            f'<b style="color:#00d4aa;">{uname.upper()}</b></span></div>',
-            unsafe_allow_html=True)
+        if GUEST:
+            st.markdown(
+                '<div style="display:flex;align-items:center;height:100%;">'
+                '<span style="font-size:0.72rem;color:#6b8bb0;">Signed in as&nbsp;'
+                '<b style="color:#ffa500;">GUEST</b>'
+                '<span style="color:#4a6a90;font-size:0.62rem;"> (view only)</span>'
+                '</span></div>',
+                unsafe_allow_html=True)
+        else:
+            st.markdown(
+                f'<div style="display:flex;align-items:center;height:100%;">'
+                f'<span style="font-size:0.72rem;color:#6b8bb0;">Signed in as&nbsp;'
+                f'<b style="color:#00d4aa;">{uname.upper()}</b></span></div>',
+                unsafe_allow_html=True)
     with r_col:
         if st.button("↺", help="Refresh", use_container_width=True):
             st.cache_data.clear(); st.rerun()
@@ -429,22 +486,37 @@ with main_left:
     with st.container(border=True):
         eq_expanded = _panel_header("Portfolio Equity", panel_key="equity", help_md="""
 **How to use:**
-- Select a period (1W / 1M / 3M / 1Y) to change the time range.
+- Select a time window from the dropdown (1 Min → 1 Year).
+  Short views (≤1 Day) show today's equity at 1-min resolution.
 - Select one or more strategies below to overlay trade markers on the chart.
-  Each coloured dot marks a trade made by that strategy.
-- This chart shows *total* portfolio equity from Alpaca.
+- This chart shows *total* portfolio equity sourced from Alpaca.
         """)
+        # (api_period, api_timeframe, tail_bars_or_None)
+        PERIOD_OPTS: dict[str, tuple] = {
+            "1 Min":   ("1D", "1Min",  5),
+            "10 Min":  ("1D", "1Min",  10),
+            "1 Hour":  ("1D", "1Min",  60),
+            "1 Day":   ("1D", "1Min",  None),
+            "1 Week":  ("1W", "1H",    None),
+            "1 Month": ("1M", "1D",    None),
+            "1 Year":  ("1A", "1D",    None),
+        }
         per_col, strat_col = st.columns([1, 2])
         with per_col:
-            period_key = st.radio("Period", ["1W","1M","3M","1Y"], index=1,
-                                  horizontal=True, label_visibility="collapsed")
+            period_key = st.selectbox("Period", list(PERIOD_OPTS), index=3,
+                                      label_visibility="collapsed")
         with strat_col:
             overlay_strats = st.multiselect(
                 "Show strategy trades", list(STRATEGIES.keys()),
-                default=[], placeholder="Select strategies to overlay…",
+                default=[], placeholder="Overlay strategy trades…",
                 label_visibility="collapsed")
-        period_map = {"1W":"1W","1M":"1M","3M":"3M","1Y":"1A"}
-        ph = _demo_ph() if DEMO else _portfolio_history(period_map[period_key])
+        api_period, api_tf, tail_n = PERIOD_OPTS[period_key]
+        if DEMO:
+            ph = _demo_ph()
+        else:
+            ph = _portfolio_history(api_period, api_tf)
+        if ph is not None and tail_n is not None:
+            ph = ph.tail(tail_n).reset_index(drop=True)
         if ph is not None:
             st.plotly_chart(_equity_fig(ph, trades, overlay_strats,
                                         height=420 if eq_expanded else 140),
@@ -478,34 +550,62 @@ with main_right:
     with st.container(border=True):
         pos_expanded = _panel_header("Open Positions", panel_key="positions", help_md="""
 **How to use:**
-- Shows all currently open paper-trading positions.
-- P&L columns are colour-coded: green = profit, red = loss.
-- When no live positions are held, sample data is shown for reference.
+- Tabs show positions owned by each strategy (tracked via trade log).
+- **All** tab shows every open Alpaca position with full P&L.
+- Expand (⤢) to see more rows at once.
         """)
+        # Build Alpaca position price map
         try:
-            pos = _demo_positions() if DEMO else broker.get_all_positions()
-            if pos:
-                rows = [{"Symbol":p.symbol,"Qty":float(p.qty),"Price":float(p.current_price),
-                         "P&L ($)":float(p.unrealized_pl),"P&L (%)":float(p.unrealized_plpc)*100}
-                        for p in pos]
-                df_p = pd.DataFrame(rows)
-                st.dataframe(
-                    df_p.style
-                        .format({"Price":"${:.2f}","P&L ($)":"${:+,.2f}","P&L (%)":"{:+.2f}%"})
-                        .map(_num_style, subset=["P&L ($)","P&L (%)"]),
-                    use_container_width=True, hide_index=True,
-                    height=500 if pos_expanded else 115)
-            else:
-                st.caption("No live positions. Showing illustrative sample:")
-                df_p = pd.DataFrame(_SAMPLE_POSITIONS)
-                st.dataframe(
-                    df_p.style
-                        .format({"Price":"${:.2f}","P&L ($)":"${:+,.2f}","P&L (%)":"{:+.2f}%"})
-                        .map(_num_style, subset=["P&L ($)","P&L (%)"]),
-                    use_container_width=True, hide_index=True,
-                    height=500 if pos_expanded else 95)
-        except Exception as e:
-            st.error(str(e))
+            _raw_pos = _demo_positions() if DEMO else broker.get_all_positions()
+            pos_map  = {p.symbol: p for p in _raw_pos}
+        except Exception:
+            pos_map = {}
+        all_syms = (["AAPL","MSFT","GOOGL","TSLA"] if DEMO
+                    else db.get_all_traded_symbols())
+        tab_h = 350 if pos_expanded else 110
+
+        STRAT_TABS = ["RSI","MACD","Bollinger","EMA Cross","Manual","All"]
+        STRAT_KEYS = ["rsi","macd","bollinger","ema_crossover","manual", None]
+        tabs = st.tabs(STRAT_TABS)
+
+        for tab, strat_key in zip(tabs, STRAT_KEYS):
+            with tab:
+                if strat_key is None:
+                    # All — raw Alpaca positions with P&L
+                    if pos_map:
+                        all_rows = [{"Symbol":p.symbol,"Qty":float(p.qty),
+                                     "Price":float(p.current_price),
+                                     "P&L ($)":float(p.unrealized_pl),
+                                     "P&L (%)":float(p.unrealized_plpc)*100}
+                                    for p in pos_map.values()]
+                        df_all = pd.DataFrame(all_rows)
+                        st.dataframe(
+                            df_all.style
+                                .format({"Price":"${:.2f}","P&L ($)":"${:+,.2f}","P&L (%)":"{:+.2f}%"})
+                                .map(_num_style, subset=["P&L ($)","P&L (%)"]),
+                            use_container_width=True, hide_index=True, height=tab_h)
+                    else:
+                        st.caption("No open positions.")
+                else:
+                    # Strategy-specific holdings from trade log
+                    if DEMO:
+                        rows = _DEMO_STRAT_POS.get(strat_key, [])
+                    else:
+                        rows = []
+                        for sym in all_syms:
+                            qty = db.get_strategy_holding(sym, strat_key)
+                            if qty > 0:
+                                p = pos_map.get(sym)
+                                price = float(p.current_price) if p else 0.0
+                                rows.append({"Symbol":sym,"Qty":round(qty,4),
+                                             "Price":price,"Value":round(qty*price,2)})
+                    if rows:
+                        df_s = pd.DataFrame(rows)
+                        st.dataframe(
+                            df_s.style.format({"Qty":"{:.0f}","Price":"${:.2f}","Value":"${:,.0f}"}),
+                            use_container_width=True, hide_index=True, height=tab_h)
+                    else:
+                        st.caption(f"No active {(strat_key or '').upper()} positions.")
 
     # ── Server + Safety ───────────────────────────────────────────────────────
     st.markdown('<div id="server"></div>', unsafe_allow_html=True)
@@ -574,6 +674,8 @@ with bt_col:
         """)
         if DEMO:
             st.info("Demo mode — backtesting requires live API access.")
+        elif GUEST:
+            st.info("👁 View-only mode — sign in to run backtests.")
         else:
             b1, b2 = st.columns(2)
             with b1: sym_bt = st.text_input("Symbol", "AAPL", placeholder="AAPL").upper()
@@ -582,6 +684,34 @@ with bt_col:
             with b3: s_bt = st.date_input("Start", date(2024,1,1))
             with b4: e_bt = st.date_input("End",   date.today())
             cap_bt = st.number_input("Starting capital ($)", value=100_000, step=10_000)
+
+            # Per-strategy parameter overrides for this backtest run
+            with st.expander("⚙ Strategy Parameters", expanded=False):
+                if strat_bt == "rsi":
+                    pc1,pc2,pc3 = st.columns(3)
+                    with pc1: bt_rsi_p  = st.number_input("RSI Period",  2,   50, int(cfg.get("rsi_period",    "14")),          key="bt_rsi_p")
+                    with pc2: bt_rsi_ov = st.number_input("Oversold",   10.,  50., float(cfg.get("rsi_oversold", "30")), step=1., key="bt_rsi_ov")
+                    with pc3: bt_rsi_ob = st.number_input("Overbought", 50.,  90., float(cfg.get("rsi_overbought","70")), step=1., key="bt_rsi_ob")
+                    bt_strat_cfg = {"rsi_period": bt_rsi_p, "rsi_oversold": bt_rsi_ov, "rsi_overbought": bt_rsi_ob}
+                elif strat_bt == "macd":
+                    pc1,pc2,pc3 = st.columns(3)
+                    with pc1: bt_mf  = st.number_input("Fast",   2,  50, int(cfg.get("macd_fast",   "12")), key="bt_mf")
+                    with pc2: bt_ms  = st.number_input("Slow",   5, 100, int(cfg.get("macd_slow",   "26")), key="bt_ms")
+                    with pc3: bt_msg = st.number_input("Signal", 2,  50, int(cfg.get("macd_signal", "9")),  key="bt_msg")
+                    bt_strat_cfg = {"macd_fast": bt_mf, "macd_slow": bt_ms, "macd_signal": bt_msg}
+                elif strat_bt == "bollinger":
+                    pc1,pc2 = st.columns(2)
+                    with pc1: bt_bw = st.number_input("Window",  5,  100, int(cfg.get("bb_window","20")),           key="bt_bw")
+                    with pc2: bt_bs = st.number_input("Std Dev", .5, 5.0, float(cfg.get("bb_std",  "2.0")), step=.5, key="bt_bs")
+                    bt_strat_cfg = {"bb_window": bt_bw, "bb_std": bt_bs}
+                elif strat_bt == "ema_crossover":
+                    pc1,pc2 = st.columns(2)
+                    with pc1: bt_ef = st.number_input("Fast EMA", 2,  50, int(cfg.get("ema_fast","9")),  key="bt_ef")
+                    with pc2: bt_es = st.number_input("Slow EMA", 5, 200, int(cfg.get("ema_slow","21")), key="bt_es")
+                    bt_strat_cfg = {"ema_fast": bt_ef, "ema_slow": bt_es}
+                else:
+                    bt_strat_cfg = {}
+            bt_settings = {**cfg, **bt_strat_cfg}
 
             run_c, add_c, clr_c = st.columns([2, 1, 1])
             with run_c:
@@ -602,7 +732,7 @@ with bt_col:
                     with st.spinner(f"Running {strat_bt.upper()} on {sym_bt}…"):
                         try:
                             st.session_state["bt"] = run_backtest(
-                                sym_bt, strat_bt, s_bt, e_bt, float(cap_bt), cfg)
+                                sym_bt, strat_bt, s_bt, e_bt, float(cap_bt), bt_settings)
                             st.session_state["bt_lbl"] = (
                                 f"{sym_bt}·{strat_bt.upper()}·{s_bt}→{e_bt}")
                         except Exception as ex:
@@ -652,23 +782,51 @@ with bt_col:
         _panel_header("Manual Trade — No Strategy", """
 **How to use:**
 - Search any symbol (e.g. TSLA) and set the quantity.
-- Choose Buy or Sell, then click **Submit**.
+- Choose Buy or Sell, then click **Order(…)**.
 - This places a paper market order that executes at market price.
-- Orders placed here are logged as "manual" and do not go through any strategy.
+- Orders placed here are logged as "manual" and appear in the Manual tab of Open Positions.
 - **Paper trading only** — no real money is ever used.
         """)
         if DEMO:
             st.info("Demo mode — manual orders are disabled.")
+        elif GUEST:
+            st.info("👁 View-only mode — sign in with an account to place orders.")
         else:
-            mt1, mt2 = st.columns(2)
-            with mt1: mt_sym = st.text_input("Symbol", key="mt_sym", placeholder="e.g. TSLA").upper()
-            with mt2: mt_qty = st.number_input("Quantity", min_value=1, step=1, key="mt_qty")
-            mt3, mt4 = st.columns([1,1])
-            with mt3: mt_side = st.radio("Side", ["Buy","Sell"], horizontal=True, key="mt_side")
+            mt1, mt2 = st.columns([1.4, 1])
+            with mt1:
+                mt_sym = st.text_input("Symbol", key="mt_sym", placeholder="e.g. TSLA").upper().strip()
+            with mt2:
+                mt_qty = st.number_input("Quantity", min_value=1, step=1, key="mt_qty")
+
+            # Live price + mini chart when symbol entered
+            mt_price: float | None = None
+            if mt_sym:
+                info = _stock_info(mt_sym)
+                if info:
+                    mt_price = info["price"]
+                    owned_qty = sum(
+                        db.get_strategy_holding(mt_sym, sk)
+                        for sk in ["rsi", "macd", "bollinger", "ema_crossover", "manual"]
+                    )
+                    pi1, pi2 = st.columns(2)
+                    pi1.metric("Live Price", f"${mt_price:,.2f}")
+                    pi2.metric("You Own", f"{owned_qty:g} shares")
+                    st.plotly_chart(_stock_mini_chart(info["hist"], height=80),
+                                    use_container_width=True, config=_NO_TB)
+                else:
+                    st.caption(f"No data for **{mt_sym}** — check the ticker symbol.")
+
+            mt3, mt4 = st.columns([1, 1])
+            with mt3:
+                mt_side = st.radio("Side", ["Buy", "Sell"], horizontal=True, key="mt_side")
             with mt4:
                 st.markdown('<div style="height:22px;"></div>', unsafe_allow_html=True)
-                submit_mt = st.button("Submit Paper Order", type="primary",
-                                      use_container_width=True)
+                if mt_price is not None:
+                    btn_label = f"Order (${mt_price * mt_qty:,.2f})"
+                else:
+                    btn_label = "Submit Paper Order"
+                submit_mt = st.button(btn_label, type="primary", use_container_width=True)
+
             if submit_mt:
                 if not mt_sym:
                     st.error("Enter a symbol.")
@@ -677,11 +835,25 @@ with bt_col:
                         req = MarketOrderRequest(
                             symbol=mt_sym,
                             qty=mt_qty,
-                            side=OrderSide.BUY if mt_side=="Buy" else OrderSide.SELL,
+                            side=OrderSide.BUY if mt_side == "Buy" else OrderSide.SELL,
                             time_in_force=TimeInForce.DAY,
                         )
                         result = broker.submit_order(req)
-                        st.success(f"Paper order submitted — {mt_side.upper()} {mt_qty}× {mt_sym}")
+                        fill_price = mt_price if mt_price else 0.0
+                        slippage_bps = int(cfg.get("slippage_bps", "5"))
+                        sim_price = broker.apply_slippage(
+                            fill_price, mt_side.lower(), slippage_bps)
+                        db.log_trade(
+                            symbol=mt_sym, side=mt_side.lower(), quantity=mt_qty,
+                            actual_price=fill_price, simulated_price=sim_price,
+                            order_id=str(result.id), strategy="manual",
+                            notes="manual order via dashboard",
+                        )
+                        st.success(
+                            f"Paper order submitted — {mt_side.upper()} {mt_qty}× {mt_sym}"
+                            + (f" @ ${fill_price:,.2f}" if fill_price else "")
+                        )
+                        _stock_info.clear()
                     except Exception as ex:
                         st.error(str(ex))
 
@@ -702,10 +874,12 @@ with cfg_col:
         if DEMO:
             st.info("Demo mode — configuration is read-only.")
         else:
+            if GUEST:
+                st.caption("👁 View-only mode — sign in to edit configuration.")
             # Trading kill switch
             en = cfg.get("trading_enabled","true").lower() == "true"
-            ne = st.toggle("Trading enabled (master switch)", value=en)
-            if ne != en:
+            ne = st.toggle("Trading enabled (master switch)", value=en, disabled=GUEST)
+            if ne != en and not GUEST:
                 db.set_config("trading_enabled","true" if ne else "false")
                 st.rerun()
 
@@ -718,35 +892,40 @@ with cfg_col:
                 "Total must stay within your portfolio balance. Remainder stays as idle cash.")
 
             DESCS = {
-                "rsi":          "RSI — 과매도 매수 · 과매수 매도 (횡보장)",
-                "macd":         "MACD — 시그널 돌파 추세추종 (추세장)",
-                "bollinger":    "Bollinger Bands — 밴드 이탈 역추세 (고변동성)",
-                "ema_crossover":"EMA Crossover — 골든/데드크로스 추세추종",
+                "rsi":          "mean-reversion (횡보장)",
+                "macd":         "trend-following (추세장)",
+                "bollinger":    "band breakout (고변동성)",
+                "ema_crossover":"golden/death cross",
             }
             max_eq = max(int(eq), 1)
 
             enabled_strats: list[str] = []
             new_alloc: dict = {}
             for strat_key in STRATEGIES:
-                sc1, sc2, sc3 = st.columns([0.3, 2, 1])
-                cur_en  = alloc_cfg.get(strat_key, {}).get("enabled", False)
-                # Support both alloc_usd (new) and legacy alloc_pct
+                sc1, sc2, sc3, sc4 = st.columns([0.18, 2.4, 0.15, 1.0])
                 raw_v   = alloc_cfg.get(strat_key, {})
-                if "alloc_usd" in raw_v:
-                    cur_usd = int(raw_v["alloc_usd"])
-                else:
-                    cur_usd = int(eq * raw_v.get("alloc_pct", 0) / 100)
+                cur_en  = raw_v.get("enabled", False)
+                cur_usd = (int(raw_v["alloc_usd"]) if "alloc_usd" in raw_v
+                           else int(eq * raw_v.get("alloc_pct", 0) / 100))
                 with sc1:
-                    is_en = st.checkbox("", value=cur_en, key=f"en_{strat_key}")
+                    is_en = st.checkbox("", value=cur_en, key=f"en_{strat_key}", disabled=GUEST)
                 with sc2:
                     st.markdown(
-                        f'<p style="font-size:0.75rem;margin:0;padding-top:6px;">'
-                        f'<b>{strat_key.upper()}</b> — {DESCS.get(strat_key,"")}</p>',
+                        f'<p style="font-size:0.68rem;margin:0;padding-top:8px;'
+                        f'color:#c8d6e8;white-space:nowrap;overflow:hidden;">'
+                        f'<b>{strat_key.upper()}</b>'
+                        f'<span style="color:#4a6a90;font-size:0.62rem;">'
+                        f' — {DESCS.get(strat_key,"")}</span></p>',
                         unsafe_allow_html=True)
                 with sc3:
+                    st.markdown(
+                        '<p style="font-size:0.78rem;margin:0;padding-top:8px;'
+                        'color:#6b8bb0;text-align:right;">$</p>',
+                        unsafe_allow_html=True)
+                with sc4:
                     usd_val = st.number_input(
-                        "$", 0, max_eq, cur_usd if is_en else 0,
-                        step=1000, disabled=not is_en,
+                        "", 0, max_eq, cur_usd if is_en else 0,
+                        step=500, disabled=not is_en or GUEST,
                         label_visibility="collapsed", key=f"usd_{strat_key}")
                 if is_en:
                     enabled_strats.append(strat_key)
@@ -767,34 +946,34 @@ with cfg_col:
             st.markdown("**Strategy Parameters**")
             with st.expander("RSI", expanded=("rsi" in enabled_strats)):
                 c1,c2,c3 = st.columns(3)
-                with c1: p  = st.number_input("Period",     2,  50, int(cfg.get("rsi_period",14)),    key="rsi_p")
-                with c2: ov = st.number_input("Oversold",  10., 50., float(cfg.get("rsi_oversold",30)),  step=1., key="rsi_ov")
-                with c3: ob = st.number_input("Overbought",50., 90., float(cfg.get("rsi_overbought",70)),step=1., key="rsi_ob")
+                with c1: p  = st.number_input("Period",     2,  50, int(cfg.get("rsi_period",14)),    key="rsi_p",  disabled=GUEST)
+                with c2: ov = st.number_input("Oversold",  10., 50., float(cfg.get("rsi_oversold",30)),  step=1., key="rsi_ov", disabled=GUEST)
+                with c3: ob = st.number_input("Overbought",50., 90., float(cfg.get("rsi_overbought",70)),step=1., key="rsi_ob", disabled=GUEST)
             with st.expander("MACD", expanded=("macd" in enabled_strats)):
                 c1,c2,c3 = st.columns(3)
-                with c1: mf  = st.number_input("Fast",  2,  50, int(cfg.get("macd_fast",12)),   key="macd_f")
-                with c2: ms  = st.number_input("Slow",  5, 100, int(cfg.get("macd_slow",26)),   key="macd_s")
-                with c3: msg = st.number_input("Signal",2,  50, int(cfg.get("macd_sig",9)),     key="macd_g")
+                with c1: mf  = st.number_input("Fast",  2,  50, int(cfg.get("macd_fast",12)),    key="macd_f", disabled=GUEST)
+                with c2: ms  = st.number_input("Slow",  5, 100, int(cfg.get("macd_slow",26)),    key="macd_s", disabled=GUEST)
+                with c3: msg = st.number_input("Signal",2,  50, int(cfg.get("macd_signal",9)),   key="macd_g", disabled=GUEST)
             with st.expander("Bollinger Bands", expanded=("bollinger" in enabled_strats)):
                 c1,c2 = st.columns(2)
-                with c1: bw = st.number_input("Window",5,100,int(cfg.get("bb_window",20)), key="bb_w")
-                with c2: bs = st.number_input("Std Dev",.5,5.0,float(cfg.get("bb_std",2.0)),step=.5,key="bb_s")
+                with c1: bw = st.number_input("Window",5,100,int(cfg.get("bb_window",20)),          key="bb_w", disabled=GUEST)
+                with c2: bs = st.number_input("Std Dev",.5,5.0,float(cfg.get("bb_std",2.0)),step=.5,key="bb_s", disabled=GUEST)
             with st.expander("EMA Crossover", expanded=("ema_crossover" in enabled_strats)):
                 c1,c2 = st.columns(2)
-                with c1: ef = st.number_input("Fast EMA",2, 50, int(cfg.get("ema_fast",9)), key="ema_f")
-                with c2: es = st.number_input("Slow EMA",5,200, int(cfg.get("ema_slow",21)),key="ema_s")
+                with c1: ef = st.number_input("Fast EMA",2, 50, int(cfg.get("ema_fast",9)),  key="ema_f", disabled=GUEST)
+                with c2: es = st.number_input("Slow EMA",5,200, int(cfg.get("ema_slow",21)), key="ema_s", disabled=GUEST)
 
             st.markdown("---")
 
             # ── Risk Limits ───────────────────────────────────────────────────
             st.markdown("**Risk Limits** *(applied globally across all strategies)*")
             rl1, rl2, rl3, rl4 = st.columns(4)
-            with rl1: pct_r   = st.number_input("Position size %",  .5, 25., float(cfg.get("position_pct",5.)),        step=.5)
-            with rl2: dloss_r = st.number_input("Daily loss limit %",.5, 20., float(cfg.get("daily_loss_limit_pct",2.)),step=.5)
-            with rl3: mpos_r  = st.number_input("Max positions",     1,  20,  int(cfg.get("max_positions",4)))
-            with rl4: mdd_r   = st.number_input("Max drawdown %",   1., 50., float(cfg.get("max_drawdown_pct",10.)),   step=1.)
+            with rl1: pct_r   = st.number_input("Position size %",  .5, 25., float(cfg.get("position_pct",5.)),        step=.5, disabled=GUEST)
+            with rl2: dloss_r = st.number_input("Daily loss limit %",.5, 20., float(cfg.get("daily_loss_limit_pct",2.)),step=.5, disabled=GUEST)
+            with rl3: mpos_r  = st.number_input("Max positions",     1,  20,  int(cfg.get("max_positions",4)),                  disabled=GUEST)
+            with rl4: mdd_r   = st.number_input("Max drawdown %",   1., 50., float(cfg.get("max_drawdown_pct",10.)),   step=1., disabled=GUEST)
 
-            if st.button("Save Configuration", type="primary", use_container_width=True):
+            if st.button("Save Configuration", type="primary", use_container_width=True, disabled=GUEST):
                 # Strategy allocation (USD)
                 db.set_config("strategy_allocation", json.dumps(new_alloc))
                 if enabled_strats:
@@ -820,4 +999,10 @@ if DEMO:
         '<div style="position:fixed;bottom:12px;right:16px;font-size:0.7rem;'
         'color:#ffa500;background:#0a0e1a;padding:4px 10px;'
         'border:1px solid #2a3a50;border-radius:4px;">DEMO MODE</div>',
+        unsafe_allow_html=True)
+if GUEST:
+    st.markdown(
+        '<div style="position:fixed;bottom:12px;right:16px;font-size:0.7rem;'
+        'color:#ffa500;background:#0a0e1a;padding:4px 10px;'
+        'border:1px solid #ffa50055;border-radius:4px;">👁 GUEST MODE</div>',
         unsafe_allow_html=True)

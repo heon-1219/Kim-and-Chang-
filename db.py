@@ -131,6 +131,15 @@ def get_strategy_holding(symbol: str, strategy: str) -> float:
         return max(float(row["net_qty"]), 0.0)
 
 
+def get_all_traded_symbols() -> list[str]:
+    """Return all distinct symbols that appear in the trade log."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT symbol FROM trades ORDER BY symbol"
+        ).fetchall()
+        return [r["symbol"] for r in rows]
+
+
 def get_recent_trades(limit: int = 50) -> list[dict]:
     with get_conn() as conn:
         rows = conn.execute(
