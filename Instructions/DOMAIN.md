@@ -8,7 +8,7 @@ This document summarizes the steps taken to connect a GoDaddy domain to a Stream
 ## 1. Server Preparation (Vultr)
 - **Service**: Vultr Instance
 - **Application**: Streamlit (Python-based)
-- **Public IP**: `45.77.106.136`
+- **Public IP**: `&lt;server-ip&gt;`
 - **Execution Strategy**: Direct binding to Port 80 (HTTP default).
 
 ## 2. DNS Configuration (GoDaddy)
@@ -16,7 +16,7 @@ To point the domain `kctrading.xyz` to the server, an **A Record** was configure
 
 | Type | Name (Host) | Value (Points to) | TTL |
 | :--- | :--- | :--- | :--- |
-| **A** | `@` | `45.77.106.136` | 1 Hour |
+| **A** | `@` | `&lt;server-ip&gt;` | 1 Hour |
 
 > **Note**: Ensure the Name is set to `@` to use the root domain. If set to `a`, the address becomes `a.kctrading.xyz`.
 

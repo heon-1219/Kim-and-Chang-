@@ -45,11 +45,16 @@ def _check_login() -> bool:
             st.text_input("PASSWORD", type="password", key="p")
             submitted = st.form_submit_button("ACCESS TERMINAL", use_container_width=True)
         if submitted:
-            ok_u = st.session_state.u == st.secrets["auth"]["username"]
-            ok_p = bcrypt.checkpw(st.session_state.p.encode(),
-                                   st.secrets["auth"]["hashed_password"].encode())
-            if ok_u and ok_p:
+            u, p = st.session_state.u, st.session_state.p.encode()
+            if (u == st.secrets["auth"]["username"] and
+                    bcrypt.checkpw(p, st.secrets["auth"]["hashed_password"].encode())):
                 st.session_state["authenticated"] = True
+                st.session_state["demo"] = False
+                st.rerun()
+            elif (u == st.secrets["demo"]["username"] and
+                    bcrypt.checkpw(p, st.secrets["demo"]["hashed_password"].encode())):
+                st.session_state["authenticated"] = True
+                st.session_state["demo"] = True
                 st.rerun()
             else:
                 st.error("Access denied.")
@@ -293,73 +298,113 @@ def _dlg_safety() -> None:
     else:
         st.success("✅ No safety events recorded.")
 
+# ── Demo mode ────────────────────────────────────────────────────────────────
+
+DEMO = st.session_state.get("demo", False)
+
+def _demo_account():
+    class _A:
+        equity=101_842.67; cash=48_231.10; buying_power=96_462.20; last_equity=99_980.00
+    return _A()
+
+def _demo_positions():
+    class _P:
+        def __init__(self, sym, qty, entry, cur, val, pl, plpc):
+            self.symbol=sym; self.qty=qty; self.avg_entry_price=entry
+            self.current_price=cur; self.market_value=val
+            self.unrealized_pl=pl; self.unrealized_plpc=plpc
+    return [_P("AAPL",10,171.42,178.91,1789.10,74.90,0.0437),
+            _P("MSFT",5, 415.80,421.33,2106.65,27.65,0.0133),
+            _P("GOOGL",8,172.10,169.55,1356.40,-20.40,-0.0148)]
+
+def _demo_trades():
+    return [{"timestamp":"2026-04-17 14:32","symbol":"AAPL","side":"buy","quantity":10,"actual_price":171.42,"slip":0.09,"strategy":"rsi"},
+            {"timestamp":"2026-04-16 10:11","symbol":"MSFT","side":"buy","quantity":5, "actual_price":415.80,"slip":0.21,"strategy":"macd"},
+            {"timestamp":"2026-04-15 15:47","symbol":"GOOGL","side":"sell","quantity":8,"actual_price":169.55,"slip":0.08,"strategy":"rsi"},
+            {"timestamp":"2026-04-14 09:35","symbol":"TSLA","side":"buy","quantity":3, "actual_price":242.10,"slip":0.12,"strategy":"bollinger"},
+            {"timestamp":"2026-04-13 11:22","symbol":"TSLA","side":"sell","quantity":3,"actual_price":251.80,"slip":0.13,"strategy":"bollinger"}]
+
+def _demo_logs():
+    return [{"timestamp":"2026-04-18 09:00","level":"INFO","message":"Bot cycle started"},
+            {"timestamp":"2026-04-18 08:55","level":"INFO","message":"RSI signal: AAPL → hold"},
+            {"timestamp":"2026-04-18 08:50","level":"WARN","message":"API rate limit approaching: 178/200"},
+            {"timestamp":"2026-04-18 08:45","level":"INFO","message":"Heartbeat OK"},
+            {"timestamp":"2026-04-17 15:30","level":"ERROR","message":"Order rejected: insufficient buying power"},
+            {"timestamp":"2026-04-17 14:32","level":"INFO","message":"BUY AAPL qty=10 @ $171.42"}]
+
+def _demo_ph() -> pd.DataFrame:
+    import numpy as np
+    rng  = pd.date_range(end=datetime.utcnow(), periods=30, freq="D")
+    vals = 100_000 * (1 + pd.Series(np.random.randn(30).cumsum() * 0.008)).values
+    return pd.DataFrame({"date": rng, "equity": vals})
+
 # ── Data ──────────────────────────────────────────────────────────────────────
 
-hb      = db.get_heartbeat()
-cfg     = db.get_all_config()
+hb      = None if DEMO else db.get_heartbeat()
+cfg     = {"trading_enabled":"true","active_strategy":"rsi"} if DEMO else db.get_all_config()
 now_utc = datetime.utcnow()
 
-# ── HEADER ────────────────────────────────────────────────────────────────────
-
-hl, hr = st.columns([6, 1])
-with hl:
-    if hb:
-        age_min = int((now_utc - datetime.fromisoformat(hb["last_beat"])).total_seconds() / 60)
-        alive   = (now_utc - datetime.fromisoformat(hb["last_beat"])) < timedelta(minutes=70)
-        bdot    = '<span style="color:#00c896;">●</span>' if alive else '<span style="color:#ff4b4b;">●</span>'
-        blbl    = f"{'ALIVE' if alive else 'STALE'} {age_min}m"
-    else:
-        bdot, blbl = '<span style="color:#ffa500;">●</span>', "NOT STARTED"
-
-    on    = cfg.get("trading_enabled","true").lower()=="true"
-    tdot  = '<span style="color:#00c896;">●</span>' if on else '<span style="color:#ff4b4b;">●</span>'
-    strat = cfg.get("active_strategy","—").upper()
-    api_n = db.count_recent_api_calls(60)
-
-    st.markdown(
-        f'<span style="font-size:0.58rem;letter-spacing:0.2em;color:#00d4aa;">KIM AND CHANG</span> '
-        f'<span style="font-size:0.92rem;font-weight:700;letter-spacing:0.04em;">TRADING TECHNOLOGIES</span>'
-        f'<span style="font-size:0.62rem;color:#6b8bb0;margin-left:1.2rem;">'
-        f'{bdot} {blbl} &nbsp; {tdot} {"ON" if on else "HALTED"} &nbsp; '
-        f'<span style="color:#e2e8f0;">{strat}</span> &nbsp; API {api_n}/200 &nbsp; '
-        f'{now_utc.strftime("%H:%M UTC")}</span>',
-        unsafe_allow_html=True)
-
-with hr:
-    rc1, rc2 = st.columns(2)
-    with rc1:
-        if st.button("⟳", help="Refresh"):
-            st.cache_data.clear(); st.rerun()
-    with rc2:
-        if st.button("⎋", help="Logout"):
-            st.session_state.clear(); st.rerun()
-
-# ── ACCOUNT METRICS ───────────────────────────────────────────────────────────
-
 try:
-    ac   = broker.get_account()
+    ac   = _demo_account() if DEMO else broker.get_account()
     eq   = float(ac.equity)
     cash = float(ac.cash)
     bp   = float(ac.buying_power)
     leq  = float(ac.last_equity)
     pnl  = eq - leq
     pp   = (pnl / leq * 100) if leq else 0.0
-    c1,c2,c3,c4 = st.columns(4)
-    c1.metric("Equity",       f"${eq:,.2f}")
-    c2.metric("Cash",         f"${cash:,.2f}")
-    c3.metric("Buying Power", f"${bp:,.2f}")
-    c4.metric("Today P&L",    f"${pnl:,.2f}", delta=f"{pp:+.2f}%")
-except Exception as e:
-    st.error(f"Account: {e}")
+except Exception:
+    eq = cash = bp = pnl = pp = 0.0
 
-# ── PORTFOLIO CHART  |  SYSTEM STATUS ─────────────────────────────────────────
+if hb:
+    age_min = int((now_utc - datetime.fromisoformat(hb["last_beat"])).total_seconds() / 60)
+    alive   = (now_utc - datetime.fromisoformat(hb["last_beat"])) < timedelta(minutes=70)
+    blbl    = f"ALIVE {age_min}m" if alive else f"STALE {age_min}m"
+else:
+    alive, blbl = False, "NOT STARTED"
 
-ch_col, ss_col = st.columns([3, 1])
+on     = cfg.get("trading_enabled","true").lower() == "true"
+strat  = cfg.get("active_strategy","—").upper()
+api_n  = 0 if DEMO else db.count_recent_api_calls(60)
+bdot_c = "#00c896" if alive else ("#ffa500" if not hb else "#ff4b4b")
+tdot_c = "#00c896" if on else "#ff4b4b"
+pnl_c  = "#00c896" if pnl >= 0 else "#ff4b4b"
+pnl_s  = "+" if pnl >= 0 else ""
 
-with ch_col:
+# ── HEADER — title + account metrics + status all inline ─────────────────────
+
+h_l, h_r = st.columns([11, 1])
+with h_l:
+    st.markdown(
+        f'<div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;padding:0.15rem 0;">'
+        f'<span style="font-size:0.55rem;letter-spacing:0.2em;color:#00d4aa;">KIM &amp; CHANG</span>'
+        f'<span style="font-size:0.88rem;font-weight:700;">TRADING TECHNOLOGIES</span>'
+        f'<span style="color:#1e3a5f;font-size:0.8rem;">│</span>'
+        f'<span style="font-size:0.62rem;color:#6b8bb0;">EQ&nbsp;<span style="color:#e2e8f0;font-family:monospace;">${eq:,.0f}</span></span>'
+        f'<span style="font-size:0.62rem;color:#6b8bb0;">CASH&nbsp;<span style="color:#e2e8f0;font-family:monospace;">${cash:,.0f}</span></span>'
+        f'<span style="font-size:0.62rem;color:#6b8bb0;">BP&nbsp;<span style="color:#e2e8f0;font-family:monospace;">${bp:,.0f}</span></span>'
+        f'<span style="font-size:0.62rem;color:#6b8bb0;">P&amp;L&nbsp;<span style="color:{pnl_c};font-family:monospace;">{pnl_s}${pnl:,.0f}&nbsp;({pp:+.2f}%)</span></span>'
+        f'<span style="color:#1e3a5f;font-size:0.8rem;">│</span>'
+        f'<span style="font-size:0.62rem;"><span style="color:{bdot_c};">●</span>&nbsp;<span style="color:#6b8bb0;">{blbl}</span></span>'
+        f'<span style="font-size:0.62rem;"><span style="color:{tdot_c};">●</span>&nbsp;<span style="color:#6b8bb0;">{"ON" if on else "HALTED"}</span></span>'
+        f'<span style="font-size:0.62rem;color:#e2e8f0;">{strat}</span>'
+        f'<span style="font-size:0.62rem;color:#6b8bb0;">API&nbsp;{api_n}/200&nbsp;·&nbsp;{now_utc.strftime("%H:%M UTC")}</span>'
+        f'</div>',
+        unsafe_allow_html=True)
+with h_r:
+    b1, b2 = st.columns(2)
+    with b1:
+        if st.button("⟳", help="Refresh"): st.cache_data.clear(); st.rerun()
+    with b2:
+        if st.button("⎋", help="Logout"):  st.session_state.clear(); st.rerun()
+
+# ── MAIN GRID: Chart | Positions | Server ────────────────────────────────────
+
+col_ch, col_pos, col_srv = st.columns([2.5, 2, 1.2])
+
+with col_ch:
     per_opts = {"1W":"1W","1M":"1M","3M":"3M","1Y":"1A"}
     per_lbl  = st.radio("p", list(per_opts), index=1, horizontal=True, label_visibility="collapsed")
-    ph = _ph(per_opts[per_lbl])
+    ph = _demo_ph() if DEMO else _ph(per_opts[per_lbl])
     if ph is not None:
         up  = ph["equity"].iloc[-1] >= ph["equity"].iloc[0]
         fig = go.Figure(go.Scatter(
@@ -367,62 +412,65 @@ with ch_col:
             fillcolor="rgba(0,200,150,0.07)" if up else "rgba(255,75,75,0.07)",
             line=dict(color="#00c896" if up else "#ff4b4b", width=1.5),
             hovertemplate="$%{y:,.2f}<extra></extra>"))
-        fig.update_layout(**PCFG, height=140)
+        fig.update_layout(**PCFG, height=220)
         fig.update_layout(yaxis=dict(tickprefix="$", tickformat=",.0f"))
         st.plotly_chart(fig, use_container_width=True, config=DCFG)
     else:
         st.info("No portfolio history yet.")
 
-with ss_col:
+with col_pos:
     try:
-        s = _sys()
+        pos = _demo_positions() if DEMO else broker.get_all_positions()
+        if pos:
+            rows = [{"Sym":p.symbol,"Qty":float(p.qty),"Entry":float(p.avg_entry_price),
+                     "Price":float(p.current_price),"Val":float(p.market_value),
+                     "P&L($)":float(p.unrealized_pl),"P&L(%)":float(p.unrealized_plpc)*100}
+                    for p in pos]
+            df = pd.DataFrame(rows)
+            _lbl(f"Positions ({len(pos)})")
+            st.dataframe(
+                df.style.format({"Entry":"${:.2f}","Price":"${:.2f}","Val":"${:,.0f}",
+                                 "P&L($)":"${:+,.2f}","P&L(%)":"{:+.2f}%"})
+                        .map(_num_css, subset=["P&L($)","P&L(%)"]),
+                use_container_width=True, hide_index=True, height=220)
+        else:
+            _lbl("Positions"); st.info("No open positions")
+    except Exception as e:
+        _lbl("Positions"); st.error(str(e))
+
+with col_srv:
+    _lbl("Server")
+    try:
+        s = dict(cpu=24,mp=41,mu=3280,mt=7976,dp=18,du=9,dt=50,up="12d 4h") if DEMO else _sys()
         def _bar(p: float) -> str:
-            c = "#00c896" if p<70 else "#ffa500" if p<90 else "#ff4b4b"
-            b = "█"*int(p/10) + "░"*(10-int(p/10))
-            return f'<span style="color:{c};font-family:monospace;font-size:0.65rem;">{b} {p:.0f}%</span>'
+            c = "#00c896" if p < 70 else "#ffa500" if p < 90 else "#ff4b4b"
+            filled = int(p / 10)
+            return (f'<span style="color:{c};font-family:monospace;font-size:0.6rem;">'
+                    f'{"█"*filled}{"░"*(10-filled)}</span>'
+                    f'<span style="color:#6b8bb0;font-size:0.6rem;"> {p:.0f}%</span>')
         st.markdown(
-            f'<div style="font-size:0.6rem;color:#6b8bb0;line-height:1.7;">'
-            f'CPU&nbsp; {_bar(s["cpu"])}<br>'
-            f'RAM&nbsp; {_bar(s["mp"])} <span style="color:#333;">{s["mu"]}/{s["mt"]}MB</span><br>'
-            f'DISK {_bar(s["dp"])} <span style="color:#333;">{s["du"]}/{s["dt"]}GB</span><br>'
-            f'UP&nbsp;&nbsp; <span style="color:#e2e8f0;font-family:monospace;">{s["up"]}</span>'
+            f'<div style="font-size:0.6rem;color:#6b8bb0;line-height:1.9;">'
+            f'CPU&nbsp;&nbsp; {_bar(s["cpu"])}<br>'
+            f'RAM&nbsp;&nbsp; {_bar(s["mp"])} <span style="color:#444;font-size:0.58rem;">{s["mu"]}/{s["mt"]}M</span><br>'
+            f'DISK&nbsp; {_bar(s["dp"])} <span style="color:#444;font-size:0.58rem;">{s["du"]}/{s["dt"]}G</span><br>'
+            f'UP&nbsp;&nbsp;&nbsp; <span style="color:#e2e8f0;font-family:monospace;font-size:0.62rem;">{s["up"]}</span>'
             f'</div>', unsafe_allow_html=True)
     except Exception:
         st.caption("Stats unavailable")
 
-# ── OPEN POSITIONS ────────────────────────────────────────────────────────────
+# ── LOWER GRID: Trades | Logs ─────────────────────────────────────────────────
 
-_lbl("Positions")
-try:
-    pos = broker.get_all_positions()
-    if pos:
-        rows = [{"Sym":p.symbol,"Qty":float(p.qty),"Entry":float(p.avg_entry_price),
-                 "Price":float(p.current_price),"Value":float(p.market_value),
-                 "P&L($)":float(p.unrealized_pl),"P&L(%)":float(p.unrealized_plpc)*100}
-                for p in pos]
-        df = pd.DataFrame(rows)
-        st.dataframe(
-            df.style.format({"Entry":"${:.2f}","Price":"${:.2f}","Value":"${:,.0f}",
-                             "P&L($)":"${:+,.2f}","P&L(%)":"{:+.2f}%"})
-                    .map(_num_css, subset=["P&L($)","P&L(%)"]),
-            use_container_width=True, hide_index=True, height=100)
-    else:
-        st.info("No open positions")
-except Exception as e:
-    st.error(str(e))
+col_tr, col_lg = st.columns([3, 2])
 
-# ── TRADES  |  LOGS ───────────────────────────────────────────────────────────
-
-tc, lc = st.columns([3, 2])
-
-with tc:
-    trades = db.get_recent_trades(limit=50)
+with col_tr:
+    trades = _demo_trades() if DEMO else db.get_recent_trades(limit=50)
     if trades:
         df = pd.DataFrame(trades)
         b  = int((df["side"]=="buy").sum())
         s2 = int((df["side"]=="sell").sum())
-        _lbl(f"Trades — {len(df)} total · {b}B · {s2}S")
-        df["slip"] = df["simulated_price"] - df["actual_price"]
+        _lbl(f"Trades — {len(df)} · {b}B {s2}S")
+        if not DEMO and "simulated_price" in df.columns:
+            df["slip"] = df["simulated_price"] - df["actual_price"]
         cols = ["timestamp","symbol","side","quantity","actual_price","slip","strategy"]
         df   = df[[c for c in cols if c in df.columns]]
         st.dataframe(df.style.map(_side_css, subset=["side"]),
@@ -430,11 +478,11 @@ with tc:
     else:
         _lbl("Trades"); st.info("No trades yet")
 
-with lc:
+with col_lg:
     _lbl("Bot Logs")
     lvls = st.multiselect("lv", ["INFO","WARN","ERROR"], default=["INFO","WARN","ERROR"],
                            label_visibility="collapsed")
-    logs = db.get_recent_logs(limit=100)
+    logs = _demo_logs() if DEMO else db.get_recent_logs(limit=100)
     if logs:
         df = pd.DataFrame(logs)
         df = df[df["level"].isin(lvls)][["timestamp","level","message"]]
@@ -448,14 +496,17 @@ with lc:
 
 st.divider()
 a1, a2, a3, a4 = st.columns([1, 1, 1, 5])
-with a1:
-    if st.button("▶  Backtest", use_container_width=True):
-        _dlg_backtest(cfg)
-with a2:
-    if st.button("⚙️  Config", use_container_width=True):
-        _dlg_config(cfg)
-with a3:
-    events = db.get_recent_safety_events(limit=50)
-    lbl    = f"🚨  Safety ({len(events)})" if events else "🚨  Safety"
-    if st.button(lbl, use_container_width=True):
-        _dlg_safety()
+if DEMO:
+    with a1: st.button("▶  Backtest", disabled=True, use_container_width=True, help="Demo mode — no live data")
+    with a2: st.button("⚙️  Config",  disabled=True, use_container_width=True, help="Demo mode — read only")
+    with a3: st.button("🚨  Safety",  disabled=True, use_container_width=True, help="Demo mode — no live data")
+    with a4: st.markdown('<span style="font-size:0.62rem;color:#ffa500;">⬡ DEMO MODE — UI preview only. No real data, trades, or API calls.</span>', unsafe_allow_html=True)
+else:
+    with a1:
+        if st.button("▶  Backtest", use_container_width=True): _dlg_backtest(cfg)
+    with a2:
+        if st.button("⚙️  Config",  use_container_width=True): _dlg_config(cfg)
+    with a3:
+        events = db.get_recent_safety_events(limit=50)
+        lbl    = f"🚨  Safety ({len(events)})" if events else "🚨  Safety"
+        if st.button(lbl, use_container_width=True): _dlg_safety()

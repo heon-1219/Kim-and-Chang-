@@ -1,7 +1,7 @@
 # Session 0418 — Internet Exposure, Auth, UI Redesign, Backtesting
 
 **Date:** 2026-04-18  
-**Domain:** The project is now publicly accessible at **kctrading.xyz** (GoDaddy domain, A record pointing to `45.77.106.136`). For setup details, see `Instructions/DOMAIN.md`.
+**Domain:** The project is now publicly accessible at **kctrading.xyz** (GoDaddy domain, A record pointing to the Vultr VPS public IP). For setup details, see `Instructions/DOMAIN.md`.
 
 ---
 
