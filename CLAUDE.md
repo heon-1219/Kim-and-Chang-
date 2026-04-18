@@ -44,7 +44,7 @@ These are critical. If a request would violate any of these, STOP and ask the us
 - ❌ **Never commit `.env` or write secrets to code/logs/URLs**.
 - ❌ **Never use `eval()` or `exec()`** on any input.
 - ❌ **Never use bare `except:`** clauses.
-- ❌ **Never bind the dashboard to `0.0.0.0`**. Localhost only (`127.0.0.1`).
+- ✅ Dashboard binds to `0.0.0.0` (internet-exposed) with bcrypt login gate in `dashboard.py`. Credentials live in `.streamlit/secrets.toml` (gitignored). Do **not** remove the `_check_login()` guard or change the binding back to `127.0.0.1` without re-adding equivalent auth.
 - ❌ **Never add web-based code upload features**. The user explicitly declined this.
 - ❌ **Never add real-money trading code paths**, even disabled or behind flags.
 

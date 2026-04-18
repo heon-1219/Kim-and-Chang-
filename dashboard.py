@@ -8,6 +8,7 @@ Streamlit dashboard for the trading bot.
 
 from datetime import datetime, timedelta
 
+import bcrypt
 import pandas as pd
 import streamlit as st
 
@@ -18,6 +19,33 @@ from strategies import STRATEGIES
 db.init_db()  # safe to call repeatedly
 
 st.set_page_config(page_title="Trading Bot", page_icon="🤖", layout="wide")
+
+
+def _check_login() -> bool:
+    if st.session_state.get("authenticated"):
+        return True
+    st.title("🔒 Trading Bot — Login")
+    with st.form("login_form"):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Login")
+    if submitted:
+        valid_user = username == st.secrets["auth"]["username"]
+        valid_pass = bcrypt.checkpw(
+            password.encode(),
+            st.secrets["auth"]["hashed_password"].encode(),
+        )
+        if valid_user and valid_pass:
+            st.session_state["authenticated"] = True
+            st.rerun()
+        else:
+            st.error("Invalid username or password.")
+    return False
+
+
+if not _check_login():
+    st.stop()
+
 st.title("🤖 Trading Bot Dashboard")
 st.caption("Paper trading mode — no real money involved")
 

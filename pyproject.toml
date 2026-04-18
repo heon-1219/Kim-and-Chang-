@@ -11,4 +11,5 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "requests>=2.32.0",
     "pytz>=2026.1.post1",
+    "bcrypt>=5.0.0",
 ]
