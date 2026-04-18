@@ -86,6 +86,14 @@ def get_crypto_bars(request):
     return crypto_client.get_crypto_bars(request)
 
 
+@track_api_call("get_portfolio_history")
+def get_portfolio_history(period: str = "1M", timeframe: str = "1D"):
+    from alpaca.trading.requests import GetPortfolioHistoryRequest
+    return trading_client.get_portfolio_history(
+        history_filter=GetPortfolioHistoryRequest(period=period, timeframe=timeframe)
+    )
+
+
 def is_rate_limited(threshold: int = None) -> bool:
     if threshold is None:
         threshold = config.RATE_LIMIT_THRESHOLD
