@@ -118,6 +118,19 @@ def log_trade(symbol: str, side: str, quantity: float,
         conn.commit()
 
 
+def get_strategy_holding(symbol: str, strategy: str) -> float:
+    """Net qty held by a strategy in a symbol: sum(buys) - sum(sells) from trade log."""
+    with get_conn() as conn:
+        row = conn.execute(
+            """SELECT COALESCE(SUM(
+                CASE WHEN side='buy' THEN quantity ELSE -quantity END
+               ), 0) AS net_qty
+               FROM trades WHERE symbol=? AND strategy=?""",
+            (symbol, strategy),
+        ).fetchone()
+        return max(float(row["net_qty"]), 0.0)
+
+
 def get_recent_trades(limit: int = 50) -> list[dict]:
     with get_conn() as conn:
         rows = conn.execute(

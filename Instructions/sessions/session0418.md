@@ -161,6 +161,50 @@ New file: `backtest.py`
 
 ---
 
+## Dashboard v8.0 — Additional Changes (same session, continued)
+
+### 7. Header Fix
+Restructured header as `st.columns([7, 3])`. Right side uses `st.columns([3, 1, 1])` so user info, ↺ refresh button, and ⏻ logout button all render in the same visual row as the title — previously they were being pushed below the header by Streamlit's layout engine.
+
+### 8. Bot Logs Relocation
+Moved Bot Logs container into the main right column, between Server+Safety and the bottom divider (`height=120`). The bottom section now contains only Backtest and Configuration.
+
+### 9. Strategy Capital Allocation UI
+Added to the Configuration panel:
+- Per-strategy rows with checkbox (enable/disable) + `st.number_input` for allocation %
+- Total allocated metric shown in real time; warns if > 100 %
+- Saved as `json.dumps(new_alloc)` under db key `"strategy_allocation"`, where `new_alloc` is `{strat_key: {"enabled": bool, "alloc_pct": int}}`
+- On save, `active_strategy` is set to the first enabled strategy (for the current single-strategy bot.py)
+- **Parallel bot execution not yet implemented** — the UI is complete but bot.py still runs a single strategy
+
+### 10. Portfolio Equity — Strategy Trade Markers & Comparison
+- `_equity_fig()` accepts `show_strats: list[str]` and overlays coloured dots at trade timestamps using `pd.Series.interpolate("time")` to find the equity value at each trade time
+- Multiselect widget above the chart lets the user pick which strategies to overlay
+- Backtest comparison: "＋ Compare" button saves result to `st.session_state["bt_compare"]`; all stored curves are overlaid on one Plotly chart with distinct colours
+
+### 11. Manual Trade Panel ("No Strategy")
+New container below Backtest Engine:
+- Symbol text input + quantity + Buy/Sell radio → **Submit Paper Order** button
+- Uses `MarketOrderRequest` / `broker.submit_order()` — paper only
+- Disabled in demo mode
+
+### 12. ? Help Popovers
+`_panel_header(title, help_md)` helper: when `help_md` is provided, renders a `st.popover("?")` button at the top-right of the panel header via an 11:1 column split.
+Applied to: Portfolio Equity, Trade Activity, Open Positions, Bot Logs, Backtest Engine, Manual Trade, Configuration.
+
+### 13. `hovermode` Duplicate-Keyword Bug Fix
+`_CHART` dict already contained `hovermode="x unified"`. The `_trades_fig()` bar chart needed `"closest"` instead. Fixed by building `chart_cfg = {**_CHART, "hovermode": "closest"}` and spreading that, rather than passing `hovermode` as an explicit kwarg alongside `**_CHART`.
+
+---
+
+## Files Changed (v8.0 additions)
+
+| File | Change |
+|---|---|
+| `dashboard.py` | v8.0 rewrite — header fix, bot logs relocation, strategy allocation, equity overlays, backtest compare, manual trade panel, ? popovers, hovermode fix |
+
+---
+
 ## VPS Deploy Checklist (after each push)
 
 ```bash
