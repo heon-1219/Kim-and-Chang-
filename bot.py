@@ -138,25 +138,33 @@ def process_symbol(symbol: str, settings: dict,
         place_sell(symbol, held_qty, current_price, settings, strategy_name)
 
 
-def _load_active_strategies(settings: dict) -> list[tuple[str, float]]:
+def _load_active_strategies(settings: dict, account_equity: float) -> list[tuple[str, float]]:
     """Return [(strategy_name, alloc_pct), ...] from strategy_allocation config.
 
-    Falls back to (active_strategy, 100%) if no allocation has been configured.
+    Supports both alloc_usd (new, dashboard converts to pct using live equity)
+    and legacy alloc_pct. Falls back to (active_strategy, 100%) if unconfigured.
     """
     try:
         alloc: dict = json.loads(settings.get("strategy_allocation", "{}"))
     except (json.JSONDecodeError, TypeError):
         alloc = {}
 
-    result = [
-        (k, float(v.get("alloc_pct", 0)))
-        for k, v in alloc.items()
-        if v.get("enabled") and k in STRATEGIES and float(v.get("alloc_pct", 0)) > 0
-    ]
+    result = []
+    for k, v in alloc.items():
+        if not v.get("enabled") or k not in STRATEGIES:
+            continue
+        if "alloc_usd" in v:
+            usd = float(v.get("alloc_usd", 0))
+            if usd > 0 and account_equity > 0:
+                result.append((k, (usd / account_equity) * 100))
+        elif "alloc_pct" in v:  # legacy fallback
+            pct = float(v.get("alloc_pct", 0))
+            if pct > 0:
+                result.append((k, pct))
+
     if result:
         return result
 
-    # Fallback: honour legacy single-strategy config
     fallback = settings.get("active_strategy", "rsi")
     if fallback in STRATEGIES:
         return [(fallback, 100.0)]
@@ -184,7 +192,7 @@ def run_one_cycle() -> None:
         time.sleep(config.RATE_LIMIT_SLEEP_SECONDS)
         return
 
-    active_strategies = _load_active_strategies(settings)
+    active_strategies = _load_active_strategies(settings, float(account.equity))
     if not active_strategies:
         db.log("WARN", "No active strategies configured — nothing to do.")
         return

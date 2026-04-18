@@ -1,16 +1,32 @@
 """
-Event-driven backtester using Alpaca historical data.
-Simulates a single-symbol, all-in strategy with slippage.
+Event-driven backtester. Uses yfinance for historical data — free, no subscription needed.
 """
 
 from datetime import date, datetime, timedelta
 
 import pandas as pd
+import yfinance as yf
 
 import broker
-from alpaca.data.requests import StockBarsRequest
-from alpaca.data.timeframe import TimeFrame
 from strategies import STRATEGIES
+
+
+def _fetch_closes(symbol: str, fetch_start: datetime, end: date) -> pd.Series:
+    end_dt = datetime(end.year, end.month, end.day) + timedelta(days=1)
+    ticker = yf.Ticker(symbol)
+    raw = ticker.history(
+        start=fetch_start.strftime("%Y-%m-%d"),
+        end=end_dt.strftime("%Y-%m-%d"),
+        auto_adjust=True,
+    )
+    if raw.empty:
+        raise ValueError(
+            f"No price data for {symbol}. Check the ticker symbol and date range."
+        )
+    closes = raw["Close"].dropna()
+    # Strip timezone — use .date to keep the calendar date regardless of offset
+    closes.index = pd.to_datetime([d.date() for d in closes.index])
+    return closes
 
 
 def run_backtest(
@@ -33,32 +49,12 @@ def run_backtest(
     if not strategy:
         raise ValueError(f"Unknown strategy: {strategy_name}")
 
-    # Fetch extra history for indicator warm-up
-    lookback = strategy.required_lookback_days(settings) + 5
+    lookback    = strategy.required_lookback_days(settings) + 5
     fetch_start = datetime(start.year, start.month, start.day) - timedelta(days=lookback)
-    fetch_end = datetime(end.year, end.month, end.day, 23, 59, 59)
+    closes      = _fetch_closes(symbol, fetch_start, end)
 
-    bars = broker.get_stock_bars(StockBarsRequest(
-        symbol_or_symbols=symbol,
-        timeframe=TimeFrame.Day,
-        start=fetch_start,
-        end=fetch_end,
-        adjustment="all",
-    ))
-
-    df = bars.df
-    if isinstance(df.index, pd.MultiIndex):
-        df = df.xs(symbol, level="symbol")
-    df.index = pd.to_datetime(df.index)
-    if df.index.tz is not None:
-        df.index = df.index.tz_convert(None)
-
-    if df.empty:
-        raise ValueError(f"No price data for {symbol} in this date range")
-
-    trade_start   = pd.Timestamp(start)
-    slippage_bps  = int(settings.get("slippage_bps", 5))
-    closes        = df["close"]
+    trade_start  = pd.Timestamp(start)
+    slippage_bps = int(settings.get("slippage_bps", 5))
 
     capital     = float(starting_capital)
     position    = 0.0
@@ -66,8 +62,8 @@ def run_backtest(
     trades      = []
     equity_rows = []
 
-    for i in range(len(df)):
-        ts    = df.index[i]
+    for i in range(len(closes)):
+        ts    = closes.index[i]
         close = float(closes.iloc[i])
 
         if ts < trade_start:
@@ -79,7 +75,7 @@ def run_backtest(
         if i == 0:
             continue
 
-        # Signal from prices BEFORE today (no look-ahead)
+        # Signal uses prices BEFORE current bar — no look-ahead bias
         signal = strategy.signal(closes.iloc[:i], settings)
 
         if signal == "buy" and position == 0.0 and capital > 0:
@@ -108,25 +104,23 @@ def run_backtest(
             position    = 0.0
             entry_price = 0.0
 
-    # Mark to market on final bar if still holding
     if equity_rows and position > 0.0:
         equity_rows[-1]["equity"] = capital + position * float(closes.iloc[-1])
 
-    equity_df = pd.DataFrame(equity_rows) if equity_rows else pd.DataFrame(columns=["date", "equity"])
+    equity_df = (pd.DataFrame(equity_rows) if equity_rows
+                 else pd.DataFrame(columns=["date", "equity"]))
 
-    # ── Performance metrics ────────────────────────────────────────────────
+    # ── Performance metrics ──────────────────────────────────────────────────
     sell_trades = [t for t in trades if t["side"] == "sell"]
 
     if len(equity_df) > 1:
         final_equity = float(equity_df["equity"].iloc[-1])
         total_return = (final_equity - starting_capital) / starting_capital * 100
-
-        daily_ret = equity_df["equity"].pct_change().dropna()
-        sharpe    = float(daily_ret.mean() / daily_ret.std() * (252 ** 0.5)) if daily_ret.std() > 0 else 0.0
-
-        roll_max = equity_df["equity"].cummax()
-        max_dd   = float(((equity_df["equity"] - roll_max) / roll_max * 100).min())
-
+        daily_ret    = equity_df["equity"].pct_change().dropna()
+        sharpe       = (float(daily_ret.mean() / daily_ret.std() * (252 ** 0.5))
+                        if daily_ret.std() > 0 else 0.0)
+        roll_max     = equity_df["equity"].cummax()
+        max_dd       = float(((equity_df["equity"] - roll_max) / roll_max * 100).min())
         wins         = [t for t in sell_trades if (t["pnl"] or 0) > 0]
         win_rate     = len(wins) / len(sell_trades) * 100 if sell_trades else 0.0
         gross_profit = sum((t["pnl"] or 0) for t in sell_trades if (t["pnl"] or 0) > 0)

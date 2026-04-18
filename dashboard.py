@@ -124,23 +124,38 @@ _STRAT_CLR = {
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _panel_header(title: str, help_md: str = "") -> None:
-    """Section title with optional ? popover button."""
-    if help_md:
-        c1, c2 = st.columns([11, 1])
-        with c1:
-            st.markdown(
-                f'<p style="font-size:0.7rem;font-weight:600;letter-spacing:0.1em;'
-                f'color:#00d4aa;text-transform:uppercase;margin:0 0 4px;">{title}</p>',
-                unsafe_allow_html=True)
+def _panel_header(title: str, help_md: str = "", panel_key: str = "") -> bool:
+    """Section title with optional ℹ popover and ⤢ expand toggle. Returns expanded state."""
+    _t = (f'<p style="font-size:0.7rem;font-weight:600;letter-spacing:0.1em;'
+          f'color:#00d4aa;text-transform:uppercase;margin:0 0 4px;">{title}</p>')
+    expanded = st.session_state.get(f"fs_{panel_key}", False) if panel_key else False
+
+    if help_md and panel_key:
+        c1, c2, c3 = st.columns([10, 1, 1])
+        with c1: st.markdown(_t, unsafe_allow_html=True)
         with c2:
-            with st.popover("?"):
-                st.markdown(help_md)
+            with st.popover("ℹ"): st.markdown(help_md)
+        with c3:
+            if st.button("⤡" if expanded else "⤢", key=f"fs_{panel_key}",
+                         use_container_width=True, help="Collapse" if expanded else "Expand"):
+                st.session_state[f"fs_{panel_key}"] = not expanded
+                st.rerun()
+    elif help_md:
+        c1, c2 = st.columns([11, 1])
+        with c1: st.markdown(_t, unsafe_allow_html=True)
+        with c2:
+            with st.popover("ℹ"): st.markdown(help_md)
+    elif panel_key:
+        c1, c2 = st.columns([11, 1])
+        with c1: st.markdown(_t, unsafe_allow_html=True)
+        with c2:
+            if st.button("⤡" if expanded else "⤢", key=f"fs_{panel_key}",
+                         use_container_width=True, help="Collapse" if expanded else "Expand"):
+                st.session_state[f"fs_{panel_key}"] = not expanded
+                st.rerun()
     else:
-        st.markdown(
-            f'<p style="font-size:0.7rem;font-weight:600;letter-spacing:0.1em;'
-            f'color:#00d4aa;text-transform:uppercase;margin:0 0 4px;">{title}</p>',
-            unsafe_allow_html=True)
+        st.markdown(_t, unsafe_allow_html=True)
+    return expanded
 
 def _num_style(v) -> str:
     try:
@@ -412,7 +427,7 @@ with main_left:
     # ── Portfolio Equity ──────────────────────────────────────────────────────
     st.markdown('<div id="equity"></div>', unsafe_allow_html=True)
     with st.container(border=True):
-        _panel_header("Portfolio Equity", """
+        eq_expanded = _panel_header("Portfolio Equity", panel_key="equity", help_md="""
 **How to use:**
 - Select a period (1W / 1M / 3M / 1Y) to change the time range.
 - Select one or more strategies below to overlay trade markers on the chart.
@@ -431,7 +446,8 @@ with main_left:
         period_map = {"1W":"1W","1M":"1M","3M":"3M","1Y":"1A"}
         ph = _demo_ph() if DEMO else _portfolio_history(period_map[period_key])
         if ph is not None:
-            st.plotly_chart(_equity_fig(ph, trades, overlay_strats, height=140),
+            st.plotly_chart(_equity_fig(ph, trades, overlay_strats,
+                                        height=420 if eq_expanded else 140),
                             use_container_width=True, config=_NO_TB)
         else:
             st.info("No portfolio history available yet.")
@@ -442,7 +458,8 @@ with main_left:
         all_strats = sorted({t.get("strategy","?") for t in trades} if trades else [])
         buys  = sum(1 for t in trades if t.get("side") == "buy")  if trades else 0
         sells = sum(1 for t in trades if t.get("side") == "sell") if trades else 0
-        _panel_header(f"Trade Activity — {buys} buy · {sells} sell", """
+        tr_expanded = _panel_header(f"Trade Activity — {buys} buy · {sells} sell",
+                                    panel_key="trades", help_md="""
 **How to use:**
 - Each bar represents one paper trade (green = buy, red = sell).
 - Hover a bar to see full details: symbol, price, quantity, strategy, timestamp.
@@ -451,14 +468,15 @@ with main_left:
         filt = st.multiselect("Filter by strategy", all_strats, default=all_strats,
                               label_visibility="collapsed",
                               placeholder="All strategies shown")
-        st.plotly_chart(_trades_fig(trades, filt or None, height=120),
+        st.plotly_chart(_trades_fig(trades, filt or None,
+                                    height=360 if tr_expanded else 120),
                         use_container_width=True, config=_NO_TB)
 
 with main_right:
     # ── Open Positions ────────────────────────────────────────────────────────
     st.markdown('<div id="positions"></div>', unsafe_allow_html=True)
     with st.container(border=True):
-        _panel_header("Open Positions", """
+        pos_expanded = _panel_header("Open Positions", panel_key="positions", help_md="""
 **How to use:**
 - Shows all currently open paper-trading positions.
 - P&L columns are colour-coded: green = profit, red = loss.
@@ -475,7 +493,8 @@ with main_right:
                     df_p.style
                         .format({"Price":"${:.2f}","P&L ($)":"${:+,.2f}","P&L (%)":"{:+.2f}%"})
                         .map(_num_style, subset=["P&L ($)","P&L (%)"]),
-                    use_container_width=True, hide_index=True, height=115)
+                    use_container_width=True, hide_index=True,
+                    height=500 if pos_expanded else 115)
             else:
                 st.caption("No live positions. Showing illustrative sample:")
                 df_p = pd.DataFrame(_SAMPLE_POSITIONS)
@@ -483,7 +502,8 @@ with main_right:
                     df_p.style
                         .format({"Price":"${:.2f}","P&L ($)":"${:+,.2f}","P&L (%)":"{:+.2f}%"})
                         .map(_num_style, subset=["P&L ($)","P&L (%)"]),
-                    use_container_width=True, hide_index=True, height=95)
+                    use_container_width=True, hide_index=True,
+                    height=500 if pos_expanded else 95)
         except Exception as e:
             st.error(str(e))
 
@@ -519,7 +539,7 @@ with main_right:
     # ── Bot Logs ──────────────────────────────────────────────────────────────
     st.markdown('<div id="logs"></div>', unsafe_allow_html=True)
     with st.container(border=True):
-        _panel_header("Bot Logs", """
+        log_expanded = _panel_header("Bot Logs", panel_key="logs", help_md="""
 **How to read:**
 - **INFO** (grey) — routine status messages.
 - **WARN** (amber) — non-critical warnings (e.g. rate limit approaching).
@@ -531,7 +551,8 @@ with main_right:
                     "WARN": "color:#ffa500",
                     "INFO": "color:#6b8bb0"}
             st.dataframe(df_l.style.map(lambda v: LS.get(v,""), subset=["level"]),
-                         use_container_width=True, hide_index=True, height=85)
+                         use_container_width=True, hide_index=True,
+                         height=500 if log_expanded else 85)
         else:
             st.caption("No log entries yet.")
 
@@ -544,10 +565,10 @@ bt_col, cfg_col = st.columns([2, 3], gap="medium")
 with bt_col:
     st.markdown('<div id="backtest"></div>', unsafe_allow_html=True)
     with st.container(border=True):
-        _panel_header("Backtest Engine", """
+        bt_expanded = _panel_header("Backtest Engine", panel_key="backtest", help_md="""
 **How to use:**
 1. Enter a symbol (e.g. AAPL), choose a strategy, set a date range and starting capital.
-2. Click **Run Backtest**. Results appear below.
+2. Click **Run Backtest**. Results appear below. Data sourced from Yahoo Finance (free).
 3. Click **Add to comparison** to store a result, then run another backtest to compare curves.
 4. Click **Clear** to reset stored comparisons.
         """)
@@ -621,7 +642,7 @@ with bt_col:
                     fig_bt.add_hline(
                         y=st.session_state["bt"]["metrics"]["starting_capital"],
                         line=dict(color="#444", width=1, dash="dot"))
-                    fig_bt.update_layout(**_CHART, height=110)
+                    fig_bt.update_layout(**_CHART, height=330 if bt_expanded else 110)
                     fig_bt.update_yaxes(tickprefix="$", tickformat=",.0f")
                     st.plotly_chart(fig_bt, use_container_width=True, config=_NO_TB)
 
@@ -668,15 +689,14 @@ with bt_col:
 with cfg_col:
     st.markdown('<div id="config"></div>', unsafe_allow_html=True)
     with st.container(border=True):
-        _panel_header("Configuration", """
+        _panel_header("Configuration", help_md="""
 **How to use:**
-- **Trading enabled** — master kill switch. Disable to halt all bot activity.
-- **Strategy Allocation** — enable one or more strategies and assign a percentage of
-  portfolio equity to each. Allocations must total ≤ 100 %. Remaining equity stays as cash.
-  *Note: running multiple strategies simultaneously requires the bot to be updated —
-  contact your developer.*
-- **Strategy Parameters** — tweak each active strategy's indicator settings.
-- **Risk Limits** — caps that apply globally across all strategies.
+- **Trading enabled** — master kill switch. Disable to halt all bot activity immediately.
+- **Strategy Allocation** — enable one or more strategies and set a USD amount for each.
+  All enabled strategies run in parallel on every bot cycle.
+- **Strategy Parameters** — tune each strategy's indicator settings. All four are always
+  editable; enabled strategies start expanded.
+- **Risk Limits** — global caps applied across all strategies.
 - Click **Save Configuration** to persist all changes immediately.
         """)
         if DEMO:
@@ -694,8 +714,8 @@ with cfg_col:
             # ── Strategy Allocation ───────────────────────────────────────────
             st.markdown("**Strategy Allocation**")
             st.caption(
-                "Enable strategies and set how much of the portfolio each manages. "
-                "Total must be ≤ 100 %. Remaining equity stays as idle cash.")
+                "Enable strategies and assign a capital amount (USD) to each. "
+                "Total must stay within your portfolio balance. Remainder stays as idle cash.")
 
             DESCS = {
                 "rsi":          "RSI — 과매도 매수 · 과매수 매도 (횡보장)",
@@ -703,13 +723,19 @@ with cfg_col:
                 "bollinger":    "Bollinger Bands — 밴드 이탈 역추세 (고변동성)",
                 "ema_crossover":"EMA Crossover — 골든/데드크로스 추세추종",
             }
+            max_eq = max(int(eq), 1)
 
             enabled_strats: list[str] = []
-            new_alloc: dict[str, int] = {}
+            new_alloc: dict = {}
             for strat_key in STRATEGIES:
                 sc1, sc2, sc3 = st.columns([0.3, 2, 1])
-                cur_en   = alloc_cfg.get(strat_key,{}).get("enabled", False)
-                cur_pct  = alloc_cfg.get(strat_key,{}).get("alloc_pct", 0)
+                cur_en  = alloc_cfg.get(strat_key, {}).get("enabled", False)
+                # Support both alloc_usd (new) and legacy alloc_pct
+                raw_v   = alloc_cfg.get(strat_key, {})
+                if "alloc_usd" in raw_v:
+                    cur_usd = int(raw_v["alloc_usd"])
+                else:
+                    cur_usd = int(eq * raw_v.get("alloc_pct", 0) / 100)
                 with sc1:
                     is_en = st.checkbox("", value=cur_en, key=f"en_{strat_key}")
                 with sc2:
@@ -718,47 +744,45 @@ with cfg_col:
                         f'<b>{strat_key.upper()}</b> — {DESCS.get(strat_key,"")}</p>',
                         unsafe_allow_html=True)
                 with sc3:
-                    pct = st.number_input(
-                        "Allocation %", 0, 100, cur_pct if is_en else 0,
-                        disabled=not is_en, label_visibility="collapsed",
-                        key=f"pct_{strat_key}")
+                    usd_val = st.number_input(
+                        "$", 0, max_eq, cur_usd if is_en else 0,
+                        step=1000, disabled=not is_en,
+                        label_visibility="collapsed", key=f"usd_{strat_key}")
                 if is_en:
                     enabled_strats.append(strat_key)
-                new_alloc[strat_key] = {"enabled": is_en, "alloc_pct": pct}
+                new_alloc[strat_key] = {"enabled": is_en, "alloc_usd": usd_val}
 
-            total_alloc = sum(v["alloc_pct"] for v in new_alloc.values())
-            alloc_colour = "normal" if total_alloc <= 100 else "inverse"
-            st.metric("Total allocated", f"{total_alloc} %",
-                      delta=f"{100-total_alloc} % idle cash" if total_alloc <= 100
-                            else f"⚠ Over-allocated by {total_alloc-100} %",
-                      delta_color=alloc_colour)
+            total_usd   = sum(v["alloc_usd"] for v in new_alloc.values())
+            idle_usd    = max(eq - total_usd, 0)
+            over_by     = max(total_usd - eq, 0)
+            alloc_ok    = total_usd <= eq
+            st.metric("Total allocated", f"${total_usd:,.0f}",
+                      delta=(f"${idle_usd:,.0f} idle cash" if alloc_ok
+                             else f"⚠ Over by ${over_by:,.0f}"),
+                      delta_color="normal" if alloc_ok else "inverse")
 
             st.markdown("---")
 
-            # ── Strategy Parameters ───────────────────────────────────────────
-            if enabled_strats:
-                for s_key in enabled_strats:
-                    with st.expander(f"{s_key.upper()} Parameters", expanded=True):
-                        if s_key == "rsi":
-                            c1,c2,c3 = st.columns(3)
-                            with c1: p  = st.number_input("Period",     2,  50, int(cfg.get("rsi_period",14)),    key="rsi_p")
-                            with c2: ov = st.number_input("Oversold",  10., 50., float(cfg.get("rsi_oversold",30)),  step=1., key="rsi_ov")
-                            with c3: ob = st.number_input("Overbought",50., 90., float(cfg.get("rsi_overbought",70)),step=1., key="rsi_ob")
-                        elif s_key == "macd":
-                            c1,c2,c3 = st.columns(3)
-                            with c1: mf  = st.number_input("Fast",  2,  50, int(cfg.get("macd_fast",12)),   key="macd_f")
-                            with c2: ms  = st.number_input("Slow",  5, 100, int(cfg.get("macd_slow",26)),   key="macd_s")
-                            with c3: msg = st.number_input("Signal",2,  50, int(cfg.get("macd_sig",9)),     key="macd_g")
-                        elif s_key == "bollinger":
-                            c1,c2 = st.columns(2)
-                            with c1: bw = st.number_input("Window",5,100,int(cfg.get("bb_window",20)), key="bb_w")
-                            with c2: bs = st.number_input("Std Dev",.5,5.0,float(cfg.get("bb_std",2.0)),step=.5,key="bb_s")
-                        elif s_key == "ema_crossover":
-                            c1,c2 = st.columns(2)
-                            with c1: ef = st.number_input("Fast EMA",2, 50, int(cfg.get("ema_fast",9)), key="ema_f")
-                            with c2: es = st.number_input("Slow EMA",5,200, int(cfg.get("ema_slow",21)),key="ema_s")
-            else:
-                st.caption("Enable at least one strategy above to configure its parameters.")
+            # ── Strategy Parameters (all strategies) ──────────────────────────
+            st.markdown("**Strategy Parameters**")
+            with st.expander("RSI", expanded=("rsi" in enabled_strats)):
+                c1,c2,c3 = st.columns(3)
+                with c1: p  = st.number_input("Period",     2,  50, int(cfg.get("rsi_period",14)),    key="rsi_p")
+                with c2: ov = st.number_input("Oversold",  10., 50., float(cfg.get("rsi_oversold",30)),  step=1., key="rsi_ov")
+                with c3: ob = st.number_input("Overbought",50., 90., float(cfg.get("rsi_overbought",70)),step=1., key="rsi_ob")
+            with st.expander("MACD", expanded=("macd" in enabled_strats)):
+                c1,c2,c3 = st.columns(3)
+                with c1: mf  = st.number_input("Fast",  2,  50, int(cfg.get("macd_fast",12)),   key="macd_f")
+                with c2: ms  = st.number_input("Slow",  5, 100, int(cfg.get("macd_slow",26)),   key="macd_s")
+                with c3: msg = st.number_input("Signal",2,  50, int(cfg.get("macd_sig",9)),     key="macd_g")
+            with st.expander("Bollinger Bands", expanded=("bollinger" in enabled_strats)):
+                c1,c2 = st.columns(2)
+                with c1: bw = st.number_input("Window",5,100,int(cfg.get("bb_window",20)), key="bb_w")
+                with c2: bs = st.number_input("Std Dev",.5,5.0,float(cfg.get("bb_std",2.0)),step=.5,key="bb_s")
+            with st.expander("EMA Crossover", expanded=("ema_crossover" in enabled_strats)):
+                c1,c2 = st.columns(2)
+                with c1: ef = st.number_input("Fast EMA",2, 50, int(cfg.get("ema_fast",9)), key="ema_f")
+                with c2: es = st.number_input("Slow EMA",5,200, int(cfg.get("ema_slow",21)),key="ema_s")
 
             st.markdown("---")
 
@@ -771,20 +795,15 @@ with cfg_col:
             with rl4: mdd_r   = st.number_input("Max drawdown %",   1., 50., float(cfg.get("max_drawdown_pct",10.)),   step=1.)
 
             if st.button("Save Configuration", type="primary", use_container_width=True):
-                # Strategy allocation
+                # Strategy allocation (USD)
                 db.set_config("strategy_allocation", json.dumps(new_alloc))
-                # Set primary active strategy (first enabled, for bot.py single-strategy mode)
                 if enabled_strats:
                     db.set_config("active_strategy", enabled_strats[0])
-                # Strategy params
-                if "rsi" in enabled_strats:
-                    db.set_config("rsi_period",str(p)); db.set_config("rsi_oversold",str(ov)); db.set_config("rsi_overbought",str(ob))
-                if "macd" in enabled_strats:
-                    db.set_config("macd_fast",str(mf)); db.set_config("macd_slow",str(ms)); db.set_config("macd_signal",str(msg))
-                if "bollinger" in enabled_strats:
-                    db.set_config("bb_window",str(bw)); db.set_config("bb_std",str(bs))
-                if "ema_crossover" in enabled_strats:
-                    db.set_config("ema_fast",str(ef)); db.set_config("ema_slow",str(es))
+                # Strategy params — always save all (all expanders are rendered)
+                db.set_config("rsi_period",str(p)); db.set_config("rsi_oversold",str(ov)); db.set_config("rsi_overbought",str(ob))
+                db.set_config("macd_fast",str(mf)); db.set_config("macd_slow",str(ms)); db.set_config("macd_signal",str(msg))
+                db.set_config("bb_window",str(bw)); db.set_config("bb_std",str(bs))
+                db.set_config("ema_fast",str(ef)); db.set_config("ema_slow",str(es))
                 # Risk limits
                 db.set_config("position_pct",str(pct_r))
                 db.set_config("max_positions",str(mpos_r))
