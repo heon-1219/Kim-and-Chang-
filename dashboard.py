@@ -131,11 +131,24 @@ _STRAT_CLR = {
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _panel_header(title: str, help_md: str = "", panel_key: str = "") -> bool:
-    """Section title with optional ℹ popover and ⤢ expand toggle. Returns expanded state."""
+def _panel_header(title: str, help_md: str = "", panel_key: str = "",
+                  page_link: str = "") -> bool:
+    """Section title with optional ℹ popover and ⤢ expand/navigate toggle."""
     _t = (f'<p style="font-size:0.7rem;font-weight:600;letter-spacing:0.1em;'
           f'color:#00d4aa;text-transform:uppercase;margin:0 0 4px;">{title}</p>')
     expanded = st.session_state.get(f"fs_{panel_key}", False) if panel_key else False
+
+    def _expand_btn():
+        if page_link:
+            if st.button("⤢", key=f"fs_{panel_key}", use_container_width=True,
+                         help="Open full analytics page"):
+                st.switch_page(page_link)
+        else:
+            if st.button("⤡" if expanded else "⤢", key=f"fs_{panel_key}",
+                         use_container_width=True,
+                         help="Collapse" if expanded else "Expand"):
+                st.session_state[f"fs_{panel_key}"] = not expanded
+                st.rerun()
 
     if help_md and panel_key:
         c1, c2, c3 = st.columns([10, 1, 1])
@@ -143,10 +156,7 @@ def _panel_header(title: str, help_md: str = "", panel_key: str = "") -> bool:
         with c2:
             with st.popover("ℹ"): st.markdown(help_md)
         with c3:
-            if st.button("⤡" if expanded else "⤢", key=f"fs_{panel_key}",
-                         use_container_width=True, help="Collapse" if expanded else "Expand"):
-                st.session_state[f"fs_{panel_key}"] = not expanded
-                st.rerun()
+            _expand_btn()
     elif help_md:
         c1, c2 = st.columns([11, 1])
         with c1: st.markdown(_t, unsafe_allow_html=True)
@@ -156,10 +166,7 @@ def _panel_header(title: str, help_md: str = "", panel_key: str = "") -> bool:
         c1, c2 = st.columns([11, 1])
         with c1: st.markdown(_t, unsafe_allow_html=True)
         with c2:
-            if st.button("⤡" if expanded else "⤢", key=f"fs_{panel_key}",
-                         use_container_width=True, help="Collapse" if expanded else "Expand"):
-                st.session_state[f"fs_{panel_key}"] = not expanded
-                st.rerun()
+            _expand_btn()
     else:
         st.markdown(_t, unsafe_allow_html=True)
     return expanded
@@ -215,17 +222,29 @@ def _portfolio_history(period: str = "1D", timeframe: str = "1D") -> pd.DataFram
         return None
 
 @st.cache_data(ttl=30)
-def _stock_info(symbol: str) -> dict | None:
-    """Current price + 5-day 15-min history from yfinance. Returns None on bad ticker."""
+def _stock_info(symbol: str, period: str = "1d", interval: str = "15m",
+                tail: int = 0) -> dict | None:
+    """Current price + price history from yfinance. Returns None on bad ticker."""
     try:
         ticker = yf.Ticker(symbol)
-        hist = ticker.history(period="5d", interval="15m", auto_adjust=True)
+        hist = ticker.history(period=period, interval=interval, auto_adjust=True)
         if hist.empty:
             return None
         hist.index = pd.to_datetime([d.replace(tzinfo=None) for d in hist.index])
+        if tail > 0:
+            hist = hist.tail(tail)
         return {"price": float(hist["Close"].iloc[-1]), "hist": hist}
     except Exception:
         return None
+
+_MT_PERIOD_OPTS: dict[str, tuple] = {
+    "1H":  ("1d",  "5m",  12),
+    "4H":  ("1d",  "5m",  48),
+    "1D":  ("1d",  "15m", 0),
+    "5D":  ("5d",  "30m", 0),
+    "1M":  ("1mo", "1d",  0),
+    "3M":  ("3mo", "1d",  0),
+}
 
 def _stock_mini_chart(hist: pd.DataFrame, height: int = 85) -> go.Figure:
     """Compact sparkline chart — no axes, used in the manual trade panel."""
@@ -548,11 +567,12 @@ with main_right:
     # ── Open Positions ────────────────────────────────────────────────────────
     st.markdown('<div id="positions"></div>', unsafe_allow_html=True)
     with st.container(border=True):
-        pos_expanded = _panel_header("Open Positions", panel_key="positions", help_md="""
+        _panel_header("Open Positions", panel_key="positions",
+                      page_link="pages/positions.py", help_md="""
 **How to use:**
 - Tabs show positions owned by each strategy (tracked via trade log).
 - **All** tab shows every open Alpaca position with full P&L.
-- Expand (⤢) to see more rows at once.
+- Click ⤢ to open the full analytics page (charts, P&L breakdown, trade history).
         """)
         # Build Alpaca position price map
         try:
@@ -562,7 +582,7 @@ with main_right:
             pos_map = {}
         all_syms = (["AAPL","MSFT","GOOGL","TSLA"] if DEMO
                     else db.get_all_traded_symbols())
-        tab_h = 350 if pos_expanded else 110
+        tab_h = 110
 
         STRAT_TABS = ["RSI","MACD","Bollinger","EMA Cross","Manual","All"]
         STRAT_KEYS = ["rsi","macd","bollinger","ema_crossover","manual", None]
@@ -639,11 +659,13 @@ with main_right:
     # ── Bot Logs ──────────────────────────────────────────────────────────────
     st.markdown('<div id="logs"></div>', unsafe_allow_html=True)
     with st.container(border=True):
-        log_expanded = _panel_header("Bot Logs", panel_key="logs", help_md="""
+        _panel_header("Bot Logs", panel_key="logs",
+                      page_link="pages/log.py", help_md="""
 **How to read:**
 - **INFO** (grey) — routine status messages.
 - **WARN** (amber) — non-critical warnings (e.g. rate limit approaching).
 - **ERROR** (red) — failures that need attention.
+- Click ⤢ to open the full log page (search, filters, trade summary, signal events).
         """)
         if logs:
             df_l = pd.DataFrame(logs)[["timestamp","level","message"]]
@@ -651,8 +673,7 @@ with main_right:
                     "WARN": "color:#ffa500",
                     "INFO": "color:#6b8bb0"}
             st.dataframe(df_l.style.map(lambda v: LS.get(v,""), subset=["level"]),
-                         use_container_width=True, hide_index=True,
-                         height=500 if log_expanded else 85)
+                         use_container_width=True, hide_index=True, height=85)
         else:
             st.caption("No log entries yet.")
 
@@ -798,19 +819,24 @@ with bt_col:
             with mt2:
                 mt_qty = st.number_input("Quantity", min_value=1, step=1, key="mt_qty")
 
-            # Live price + mini chart when symbol entered
+            # Live price + period-selectable mini chart when symbol entered
             mt_price: float | None = None
             if mt_sym:
-                info = _stock_info(mt_sym)
+                mt_period_key = st.selectbox(
+                    "Chart period", list(_MT_PERIOD_OPTS), index=2,
+                    label_visibility="collapsed", key="mt_period")
+                mt_per, mt_iv, mt_tail = _MT_PERIOD_OPTS[mt_period_key]
+                info = _stock_info(mt_sym, mt_per, mt_iv, mt_tail)
                 if info:
                     mt_price = info["price"]
                     owned_qty = sum(
                         db.get_strategy_holding(mt_sym, sk)
                         for sk in ["rsi", "macd", "bollinger", "ema_crossover", "manual"]
                     )
-                    pi1, pi2 = st.columns(2)
-                    pi1.metric("Live Price", f"${mt_price:,.2f}")
-                    pi2.metric("You Own", f"{owned_qty:g} shares")
+                    pi1, pi2, pi3 = st.columns(3)
+                    pi1.metric("Live Price",  f"${mt_price:,.2f}")
+                    pi2.metric("You Own",     f"{owned_qty:g} shares")
+                    pi3.metric("Period",      mt_period_key)
                     st.plotly_chart(_stock_mini_chart(info["hist"], height=80),
                                     use_container_width=True, config=_NO_TB)
                 else:
