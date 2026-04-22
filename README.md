@@ -122,8 +122,8 @@ Accessible at **kctrading.xyz** (port 80). Bloomberg Terminal style — all pane
 - Server status (CPU / RAM / Disk / Uptime) + Safety events
 
 **Bottom row (always visible):**
-- Backtest Engine — run any strategy on any symbol/date range, results + equity curve inline
-- Configuration — kill switch, strategy selector, parameters, risk limits, Save
+- Backtest Engine — run any strategy on one or more symbols over a date range; results include an equity curve plus a dashed summed buy-and-hold baseline for direct comparison
+- Configuration — kill switch, per-strategy enable + USD allocation, Top-N picker size, parameters, risk limits, Save
 - Recent trades + Bot logs
 
 For domain setup details, see `Instructions/DOMAIN.md`.
@@ -132,18 +132,22 @@ For domain setup details, see `Instructions/DOMAIN.md`.
 
 ## Strategies
 
-| Key | Name | Style | Logic |
-|---|---|---|---|
-| `rsi` | RSI | Mean-reversion | RSI < oversold → buy · RSI > overbought → sell |
-| `macd` | MACD | Trend-following | MACD crosses above signal → buy · below → sell |
-| `bollinger` | Bollinger Bands | Mean-reversion | Price below lower band → buy · above upper band → sell |
-| `ema_crossover` | EMA Crossover | Trend-following | Golden cross → buy · Death cross → sell |
+All enabled strategies run in parallel every cycle. Each one also picks its own top-N symbols from the S&P 500 once per day (ranked by the strategy's own setup fit), on top of any manual symbols in the `symbols` config.
+
+| Key | Name | Style | Signal logic | Picker ranking |
+|---|---|---|---|---|
+| `rsi` | RSI | Mean-reversion | RSI < oversold → buy · RSI > overbought → sell | most oversold first |
+| `macd` | MACD | Trend-following | MACD crosses above signal → buy · below → sell | strongest positive histogram |
+| `bollinger` | Bollinger Bands | Mean-reversion | Price below lower band → buy · above upper band → sell | deepest below lower band |
+| `ema_crossover` | EMA Crossover | Trend-following | Golden cross → buy · Death cross → sell | widest positive fast-over-slow spread |
+
+The loop ticks every 5 minutes on 15-minute bars, so each strategy re-evaluates its symbols several times per session.
 
 ### Adding a new strategy
-1. Create `strategies/your_strategy.py` inheriting `BaseStrategy`
-2. Add it to `STRATEGIES` in `strategies/__init__.py`
-3. Add default params to `config.py`
-4. Push → pull → restart. It appears in the Config dialog automatically.
+1. Create `strategies/your_strategy.py` inheriting `BaseStrategy`. Override `signal` (required) and optionally `pick_symbols` (falls back to the first N of the universe).
+2. Add it to `STRATEGIES` in `strategies/__init__.py`.
+3. Add default params to `config.py`.
+4. Push → pull → restart. It appears in the Config panel automatically.
 
 ---
 
@@ -163,7 +167,7 @@ For domain setup details, see `Instructions/DOMAIN.md`.
 
 ## Kill Switch
 
-1. **Dashboard** — Config dialog → toggle "Trading enabled" OFF. Applies on next bot cycle (≤ 1 hour).
+1. **Dashboard** — Config dialog → toggle "Trading enabled" OFF. Applies on the next bot cycle (≤ 5 min).
 2. **Immediate** — `sudo systemctl stop trading-bot`
 
 Auto-safety triggers (daily loss limit, max drawdown, runaway detection) also flip the kill switch and require manual re-enable.
@@ -181,7 +185,8 @@ trading-bot/
 ├── config.py                   # default constants
 ├── safety.py                   # kill switch + risk limits
 ├── broker.py                   # Alpaca API wrapper (rate limit + slippage)
-├── notifications.py            # Telegram alerts
+├── notifications.py            # Telegram alerts (trade alerts include per-strategy equity)
+├── universe.py                 # S&P 500 symbol fetch (daily cached)
 ├── strategies/
 │   ├── __init__.py             # strategy registry
 │   ├── base.py                 # BaseStrategy ABC

@@ -5,6 +5,8 @@ RSI (Relative Strength Index) mean-reversion strategy.
 - otherwise        -> 'hold'
 """
 
+from typing import Callable
+
 import pandas as pd
 from ta.momentum import RSIIndicator
 
@@ -37,3 +39,21 @@ class RSIStrategy(BaseStrategy):
         if latest_rsi > overbought:
             return "sell"
         return "hold"
+
+    def pick_symbols(self, universe, n, fetch_closes, settings):
+        period = int(settings.get("rsi_period", "14"))
+        scored: list[tuple[float, str]] = []
+        for sym in universe:
+            try:
+                closes = fetch_closes(sym)
+                if len(closes) < period + 1:
+                    continue
+                rsi = RSIIndicator(close=closes, window=period).rsi().iloc[-1]
+                if pd.isna(rsi):
+                    continue
+                # Most oversold first (lowest RSI best for a mean-reversion buy)
+                scored.append((float(rsi), sym))
+            except Exception:
+                continue
+        scored.sort(key=lambda t: t[0])
+        return [s for _, s in scored[:n]]

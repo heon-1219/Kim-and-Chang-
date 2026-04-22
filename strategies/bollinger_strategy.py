@@ -38,3 +38,26 @@ class BollingerStrategy(BaseStrategy):
         if latest_price > upper.iloc[-1]:
             return "sell"
         return "hold"
+
+    def pick_symbols(self, universe, n, fetch_closes, settings):
+        window = int(settings.get("bb_window", "20"))
+        std = float(settings.get("bb_std", "2.0"))
+        scored: list[tuple[float, str]] = []
+        for sym in universe:
+            try:
+                closes = fetch_closes(sym)
+                if len(closes) < window + 1:
+                    continue
+                bb = BollingerBands(close=closes, window=window, window_dev=std)
+                lower = bb.bollinger_lband().iloc[-1]
+                upper = bb.bollinger_hband().iloc[-1]
+                price = closes.iloc[-1]
+                if pd.isna(lower) or pd.isna(upper) or upper == lower:
+                    continue
+                # %B: 0 at lower band, 1 at upper. Prefer deepest below lower (tiny/neg).
+                pct_b = (price - lower) / (upper - lower)
+                scored.append((float(pct_b), sym))
+            except Exception:
+                continue
+        scored.sort(key=lambda t: t[0])
+        return [s for _, s in scored[:n]]

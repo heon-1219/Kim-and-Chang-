@@ -31,13 +31,13 @@ DEFAULT_MAX_POSITIONS = 4
 # Safety limits
 DEFAULT_DAILY_LOSS_LIMIT_PCT = 2.0   # auto-kill if today's loss exceeds this
 DEFAULT_MAX_DRAWDOWN_PCT = 10.0      # auto-kill if drawdown exceeds this
-DEFAULT_MAX_TRADES_PER_MINUTE = 5    # detect runaway loops
+DEFAULT_MAX_TRADES_PER_MINUTE = 20   # detect runaway loops
 
 # Slippage simulation
 DEFAULT_SLIPPAGE_BPS = 5             # 5 basis points = 0.05%
 
 # Bot loop
-LOOP_INTERVAL_SECONDS = 3600         # 1 hour
+LOOP_INTERVAL_SECONDS = 300          # 5 min — active intraday trading
 RATE_LIMIT_SLEEP_SECONDS = 30        # extra sleep when near rate limit
 RATE_LIMIT_THRESHOLD = 180           # Alpaca limit is 200/min; leave 20 buffer
 
@@ -46,3 +46,6 @@ DB_PATH = "trading.db"
 
 # Default active strategy
 DEFAULT_ACTIVE_STRATEGY = "rsi"
+
+# How many S&P 500 names each strategy picks per day
+DEFAULT_PICKER_TOP_N = 10

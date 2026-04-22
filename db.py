@@ -92,6 +92,7 @@ def init_db() -> None:
             ("max_trades_per_minute", str(config.DEFAULT_MAX_TRADES_PER_MINUTE)),
             ("slippage_bps", str(config.DEFAULT_SLIPPAGE_BPS)),
             ("active_strategy", config.DEFAULT_ACTIVE_STRATEGY),
+            ("picker_top_n", str(config.DEFAULT_PICKER_TOP_N)),
         ]
         conn.executemany(
             "INSERT OR IGNORE INTO bot_config (key, value, updated_at) VALUES (?, ?, ?)",
@@ -129,6 +130,93 @@ def get_strategy_holding(symbol: str, strategy: str) -> float:
             (symbol, strategy),
         ).fetchone()
         return max(float(row["net_qty"]), 0.0)
+
+
+def get_strategy_trades(strategy: str) -> list[dict]:
+    """All trades for a strategy, oldest first — used for FIFO cost basis math."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM trades WHERE strategy=? ORDER BY timestamp ASC",
+            (strategy,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_strategy_open_positions(strategy: str) -> dict[str, dict]:
+    """
+    Reconstruct open positions per symbol for one strategy from the trade log.
+    Returns {symbol: {"qty": float, "avg_cost": float}}.
+    FIFO-matched: sells reduce the oldest remaining buy lots first.
+    """
+    lots: dict[str, list[list[float]]] = {}  # symbol -> [[qty, price], ...]
+    for t in get_strategy_trades(strategy):
+        sym = t["symbol"]
+        qty = float(t["quantity"])
+        price = float(t["simulated_price"])
+        lots.setdefault(sym, [])
+        if t["side"] == "buy":
+            lots[sym].append([qty, price])
+        elif t["side"] == "sell":
+            remaining = qty
+            while remaining > 1e-9 and lots[sym]:
+                lot_qty, _ = lots[sym][0]
+                if lot_qty <= remaining + 1e-9:
+                    remaining -= lot_qty
+                    lots[sym].pop(0)
+                else:
+                    lots[sym][0][0] = lot_qty - remaining
+                    remaining = 0
+    out: dict[str, dict] = {}
+    for sym, sym_lots in lots.items():
+        qty = sum(l[0] for l in sym_lots)
+        if qty <= 1e-9:
+            continue
+        cost = sum(l[0] * l[1] for l in sym_lots)
+        out[sym] = {"qty": qty, "avg_cost": cost / qty}
+    return out
+
+
+def get_strategy_realized_pnl(strategy: str) -> float:
+    """FIFO-matched realised P&L from completed sell trades for one strategy."""
+    lots: dict[str, list[list[float]]] = {}
+    realized = 0.0
+    for t in get_strategy_trades(strategy):
+        sym = t["symbol"]
+        qty = float(t["quantity"])
+        price = float(t["simulated_price"])
+        lots.setdefault(sym, [])
+        if t["side"] == "buy":
+            lots[sym].append([qty, price])
+        elif t["side"] == "sell":
+            remaining = qty
+            while remaining > 1e-9 and lots[sym]:
+                lot_qty, lot_price = lots[sym][0]
+                matched = min(lot_qty, remaining)
+                realized += matched * (price - lot_price)
+                if matched >= lot_qty - 1e-9:
+                    lots[sym].pop(0)
+                else:
+                    lots[sym][0][0] = lot_qty - matched
+                remaining -= matched
+    return realized
+
+
+def get_strategy_equity(strategy: str, allocated_usd: float,
+                        current_prices: dict[str, float]) -> float:
+    """
+    Total value managed by this strategy:
+      allocated_usd + realised P&L + unrealised P&L on open positions.
+    `current_prices` maps {symbol: latest_price} for the strategy's open positions.
+    """
+    realized = get_strategy_realized_pnl(strategy)
+    open_pos = get_strategy_open_positions(strategy)
+    unrealized = 0.0
+    for sym, p in open_pos.items():
+        mkt = current_prices.get(sym)
+        if mkt is None:
+            continue
+        unrealized += p["qty"] * (mkt - p["avg_cost"])
+    return float(allocated_usd) + realized + unrealized
 
 
 def get_all_traded_symbols() -> list[str]:

@@ -39,3 +39,25 @@ class EMACrossoverStrategy(BaseStrategy):
         if prev_above and not curr_above:
             return "sell"
         return "hold"
+
+    def pick_symbols(self, universe, n, fetch_closes, settings):
+        fast = int(settings.get("ema_fast", "9"))
+        slow = int(settings.get("ema_slow", "21"))
+        scored: list[tuple[float, str]] = []
+        for sym in universe:
+            try:
+                closes = fetch_closes(sym)
+                if len(closes) < slow + 1:
+                    continue
+                fast_ema = EMAIndicator(close=closes, window=fast).ema_indicator().iloc[-1]
+                slow_ema = EMAIndicator(close=closes, window=slow).ema_indicator().iloc[-1]
+                price = closes.iloc[-1]
+                if pd.isna(fast_ema) or pd.isna(slow_ema) or price == 0:
+                    continue
+                # Prefer strongest positive fast-over-slow spread
+                spread = (fast_ema - slow_ema) / price
+                scored.append((-float(spread), sym))
+            except Exception:
+                continue
+        scored.sort(key=lambda t: t[0])
+        return [s for _, s in scored[:n]]

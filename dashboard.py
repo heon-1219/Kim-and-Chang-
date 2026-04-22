@@ -136,7 +136,8 @@ def _panel_header(title: str, help_md: str = "", panel_key: str = "",
     """Section title with optional ℹ popover and ⤢ expand/navigate toggle."""
     _t = (f'<p style="font-size:0.7rem;font-weight:600;letter-spacing:0.1em;'
           f'color:#00d4aa;text-transform:uppercase;margin:0 0 4px;">{title}</p>')
-    expanded = st.session_state.get(f"fs_{panel_key}", False) if panel_key else False
+    state_key = f"_fsstate_{panel_key}"
+    expanded = st.session_state.get(state_key, False) if panel_key else False
 
     def _expand_btn():
         if page_link:
@@ -147,7 +148,7 @@ def _panel_header(title: str, help_md: str = "", panel_key: str = "",
             if st.button("⤡" if expanded else "⤢", key=f"fs_{panel_key}",
                          use_container_width=True,
                          help="Collapse" if expanded else "Expand"):
-                st.session_state[f"fs_{panel_key}"] = not expanded
+                st.session_state[state_key] = not expanded
                 st.rerun()
 
     if help_md and panel_key:
@@ -421,7 +422,6 @@ else:
     alive, bot_lbl = False, "⚪ Not started"
 
 on    = cfg.get("trading_enabled","true").lower() == "true"
-strat = cfg.get("active_strategy","—").upper()
 api_n = 0 if DEMO else db.count_recent_api_calls(60)
 
 # Parse strategy allocations (JSON stored in db)
@@ -430,6 +430,8 @@ try:
     alloc_cfg: dict = json.loads(_alloc_raw)
 except (json.JSONDecodeError, TypeError):
     alloc_cfg = {}
+
+n_active_strats = sum(1 for v in alloc_cfg.values() if v.get("enabled"))
 
 # ── HEADER ───────────────────────────────────────────────────────────────────
 
@@ -444,8 +446,9 @@ with left_hdr:
         f'<span style="font-size:0.72rem;color:#6b8bb0;">{bot_lbl}</span>'
         f'<span style="font-size:0.72rem;color:{"#00c896" if on else "#ff4b4b"};">'
         f'{"🟢 Trading ON" if on else "🔴 Halted"}</span>'
-        f'<span style="font-size:0.72rem;color:#6b8bb0;">Strategy: '
-        f'<b style="color:#e2e8f0;">{strat}</b></span>'
+        f'<span style="font-size:0.72rem;color:#6b8bb0;">'
+        f'<b style="color:#e2e8f0;">{n_active_strats}</b> '
+        f'{"strategy" if n_active_strats == 1 else "strategies"} active</span>'
         f'<span style="font-size:0.72rem;color:#6b8bb0;">API {api_n}/200 &nbsp; '
         f'{now_utc.strftime("%H:%M UTC")}</span>'
         f'</div>',
@@ -688,10 +691,13 @@ with bt_col:
     with st.container(border=True):
         bt_expanded = _panel_header("Backtest Engine", panel_key="backtest", help_md="""
 **How to use:**
-1. Enter a symbol (e.g. AAPL), choose a strategy, set a date range and starting capital.
+1. Enter one or more symbols (e.g. `AAPL` or `AAPL, MSFT, GOOGL`), choose a strategy,
+   set a date range and starting capital. For multi-symbol runs the capital is split
+   evenly and the strategy runs independently per symbol.
 2. Click **Run Backtest**. Results appear below. Data sourced from Yahoo Finance (free).
-3. Click **Add to comparison** to store a result, then run another backtest to compare curves.
-4. Click **Clear** to reset stored comparisons.
+3. A dashed grey **Buy & Hold** line shows what holding the same basket passively would have returned.
+4. Click **Add to comparison** to store a result, then run another backtest to compare curves.
+5. Click **Clear** to reset stored comparisons.
         """)
         if DEMO:
             st.info("Demo mode — backtesting requires live API access.")
@@ -699,7 +705,11 @@ with bt_col:
             st.info("👁 View-only mode — sign in to run backtests.")
         else:
             b1, b2 = st.columns(2)
-            with b1: sym_bt = st.text_input("Symbol", "AAPL", placeholder="AAPL").upper()
+            with b1:
+                sym_bt_raw = st.text_input("Symbols (comma-separated)", "AAPL",
+                                           placeholder="AAPL, MSFT, GOOGL")
+                sym_bt_list = [s.strip().upper() for s in sym_bt_raw.split(",") if s.strip()]
+                sym_bt = sym_bt_list[0] if len(sym_bt_list) == 1 else ",".join(sym_bt_list)
             with b2: strat_bt = st.selectbox("Strategy", list(STRATEGIES.keys()))
             b3, b4 = st.columns(2)
             with b3: s_bt = st.date_input("Start", date(2024,1,1))
@@ -749,13 +759,20 @@ with bt_col:
             if run_bt:
                 if s_bt >= e_bt:
                     st.error("Start must be before end.")
+                elif not sym_bt_list:
+                    st.error("Enter at least one symbol.")
                 else:
-                    with st.spinner(f"Running {strat_bt.upper()} on {sym_bt}…"):
+                    with st.spinner(f"Running {strat_bt.upper()} on {', '.join(sym_bt_list)}…"):
                         try:
                             st.session_state["bt"] = run_backtest(
-                                sym_bt, strat_bt, s_bt, e_bt, float(cap_bt), bt_settings)
+                                sym_bt_list, strat_bt, s_bt, e_bt, float(cap_bt), bt_settings)
+                            label_syms = (sym_bt_list[0] if len(sym_bt_list) == 1
+                                          else f"{len(sym_bt_list)} syms")
                             st.session_state["bt_lbl"] = (
-                                f"{sym_bt}·{strat_bt.upper()}·{s_bt}→{e_bt}")
+                                f"{label_syms}·{strat_bt.upper()}·{s_bt}→{e_bt}")
+                            if st.session_state["bt"].get("errors"):
+                                for err in st.session_state["bt"]["errors"]:
+                                    st.warning(err)
                         except Exception as ex:
                             st.error(str(ex))
 
@@ -789,6 +806,16 @@ with bt_col:
                             mode="lines", name=lbl,
                             line=dict(color=line_c, width=1.5),
                             hovertemplate="$%{y:,.0f}<extra>" + lbl + "</extra>"))
+
+                # Buy-and-hold baseline for the latest run (summed across symbols)
+                hold_c = st.session_state["bt"].get("buy_and_hold_curve", pd.DataFrame())
+                if hold_c is not None and not hold_c.empty:
+                    fig_bt.add_trace(go.Scatter(
+                        x=hold_c["date"], y=hold_c["equity"],
+                        mode="lines", name="Buy & Hold",
+                        line=dict(color="#8899aa", width=1.3, dash="dash"),
+                        hovertemplate="$%{y:,.0f}<extra>Buy & Hold</extra>"))
+
                 if fig_bt.data:
                     fig_bt.add_hline(
                         y=st.session_state["bt"]["metrics"]["starting_capital"],
@@ -957,6 +984,15 @@ with cfg_col:
                     enabled_strats.append(strat_key)
                 new_alloc[strat_key] = {"enabled": is_en, "alloc_usd": usd_val}
 
+            # Enabled strategies with $0 get auto-split on save so the bot doesn't
+            # silently drop them. We detect here purely for the warning.
+            zero_enabled = [k for k in enabled_strats if new_alloc[k]["alloc_usd"] == 0]
+            if zero_enabled:
+                st.warning(
+                    f"⚠ {', '.join(k.upper() for k in zero_enabled)} enabled with $0 — "
+                    "on save these will be auto-split across the remaining idle cash, "
+                    "otherwise the bot would skip them.")
+
             total_usd   = sum(v["alloc_usd"] for v in new_alloc.values())
             idle_usd    = max(eq - total_usd, 0)
             over_by     = max(total_usd - eq, 0)
@@ -965,6 +1001,13 @@ with cfg_col:
                       delta=(f"${idle_usd:,.0f} idle cash" if alloc_ok
                              else f"⚠ Over by ${over_by:,.0f}"),
                       delta_color="normal" if alloc_ok else "inverse")
+
+            top_n = st.number_input(
+                "Top-N stocks per strategy (picked daily from S&P 500)",
+                min_value=1, max_value=100,
+                value=int(cfg.get("picker_top_n", "10")),
+                step=1, disabled=GUEST,
+                help="Each enabled strategy ranks S&P 500 names and trades its top-N per day.")
 
             st.markdown("---")
 
@@ -1000,10 +1043,22 @@ with cfg_col:
             with rl4: mdd_r   = st.number_input("Max drawdown %",   1., 50., float(cfg.get("max_drawdown_pct",10.)),   step=1., disabled=GUEST)
 
             if st.button("Save Configuration", type="primary", use_container_width=True, disabled=GUEST):
+                # Auto-split idle cash across enabled strategies that have $0
+                final_alloc = {k: dict(v) for k, v in new_alloc.items()}
+                zero_enabled_k = [k for k in enabled_strats
+                                  if final_alloc[k]["alloc_usd"] == 0]
+                if zero_enabled_k:
+                    idle_cash = max(int(eq) - sum(v["alloc_usd"] for v in final_alloc.values()), 0)
+                    if idle_cash > 0:
+                        share = idle_cash // len(zero_enabled_k)
+                        for k in zero_enabled_k:
+                            final_alloc[k]["alloc_usd"] = int(share)
                 # Strategy allocation (USD)
-                db.set_config("strategy_allocation", json.dumps(new_alloc))
+                db.set_config("strategy_allocation", json.dumps(final_alloc))
                 if enabled_strats:
                     db.set_config("active_strategy", enabled_strats[0])
+                # Picker top-N
+                db.set_config("picker_top_n", str(int(top_n)))
                 # Strategy params — always save all (all expanders are rendered)
                 db.set_config("rsi_period",str(p)); db.set_config("rsi_oversold",str(ov)); db.set_config("rsi_overbought",str(ob))
                 db.set_config("macd_fast",str(mf)); db.set_config("macd_slow",str(ms)); db.set_config("macd_signal",str(msg))
