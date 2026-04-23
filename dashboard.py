@@ -344,30 +344,31 @@ def _fmt_price(p: float) -> str:
 
 
 def _ticker_card_html(label: str, price: float | None, pct: float | None) -> str:
-    """Ultra-compact two-line card for the market ticker strip."""
+    """Taller three-line card for the market ticker strip."""
     base = (
-        "background:#0d1526;border:1px solid #1e3a5f;border-radius:4px;"
-        "padding:2px 4px;text-align:center;line-height:1.15;"
+        "background:#0d1526;border:1px solid #1e3a5f;border-radius:5px;"
+        "padding:8px 6px;text-align:center;line-height:1.35;"
         "overflow:hidden;white-space:nowrap;"
     )
     lbl = (
-        f'<div style="font-size:0.52rem;letter-spacing:0.05em;'
-        f'color:#6b8bb0;text-transform:uppercase;">{label}</div>'
+        f'<div style="font-size:0.55rem;letter-spacing:0.08em;'
+        f'color:#6b8bb0;text-transform:uppercase;margin-bottom:2px;">{label}</div>'
     )
     if price is None or pct is None:
         return (
             f'<div style="{base}">{lbl}'
-            '<div style="font-size:0.68rem;color:#4a6a90;">— n/a</div>'
+            '<div style="font-size:0.78rem;color:#4a6a90;font-weight:600;">—</div>'
+            '<div style="font-size:0.58rem;color:#4a6a90;">n/a</div>'
             '</div>'
         )
     color = "#00c896" if pct >= 0 else "#ff4b4b"
     arrow = "▲" if pct >= 0 else "▼"
     return (
         f'<div style="{base}">{lbl}'
-        f'<div style="font-size:0.7rem;color:#e2e8f0;font-weight:600;">'
-        f'{_fmt_price(price)}'
-        f'<span style="font-size:0.56rem;color:{color};font-weight:600;'
-        f'margin-left:4px;">{arrow}{pct:+.2f}%</span></div>'
+        f'<div style="font-size:0.82rem;color:#e2e8f0;font-weight:600;'
+        f'margin-bottom:2px;">{_fmt_price(price)}</div>'
+        f'<div style="font-size:0.6rem;color:{color};font-weight:600;">'
+        f'{arrow} {pct:+.2f}%</div>'
         '</div>'
     )
 
@@ -1015,31 +1016,40 @@ with main_left:
                         use_container_width=True, config=_NO_TB)
 
     # ── Market Ticker (indices + Magnificent 7) ───────────────────────────────
+    # Constrain horizontally with a 5:1 sub-split so the panel's width matches
+    # the Backtest Engine column below (main_left is 60% of page, Backtest is
+    # 50%; 5/6 of main_left ≈ 50%).
     st.markdown('<div id="market"></div>', unsafe_allow_html=True)
-    with st.container(border=True):
-        st.markdown(
-            '<p style="font-size:0.6rem;font-weight:600;letter-spacing:0.1em;'
-            'color:#00d4aa;text-transform:uppercase;margin:0 0 3px;">'
-            'Market Snapshot '
-            '<span style="color:#4a6a90;font-weight:400;letter-spacing:0;">'
-            '· indices + Mag 7 · daily %</span></p>',
-            unsafe_allow_html=True)
-        all_syms = tuple(s for s, _ in _MARKET_INDICES) + tuple(s for s, _ in _MAG7)
-        snaps = _ticker_snapshots(all_syms)
+    ms_col, _ms_pad = st.columns([5, 1], gap="small")
+    with ms_col:
+        with st.container(border=True):
+            st.markdown(
+                '<p style="font-size:0.6rem;font-weight:600;letter-spacing:0.1em;'
+                'color:#00d4aa;text-transform:uppercase;margin:0 0 6px;">'
+                'Market Snapshot '
+                '<span style="color:#4a6a90;font-weight:400;letter-spacing:0;">'
+                '· indices + Mag 7 · daily %</span></p>',
+                unsafe_allow_html=True)
+            all_syms = tuple(s for s, _ in _MARKET_INDICES) + tuple(s for s, _ in _MAG7)
+            snaps = _ticker_snapshots(all_syms)
 
-        idx_cols = st.columns(len(_MARKET_INDICES), gap="small")
-        for col, (sym, label) in zip(idx_cols, _MARKET_INDICES):
-            price, pct = snaps.get(sym, (None, None))
-            with col:
-                st.markdown(_ticker_card_html(label, price, pct),
-                            unsafe_allow_html=True)
+            idx_cols = st.columns(len(_MARKET_INDICES), gap="small")
+            for col, (sym, label) in zip(idx_cols, _MARKET_INDICES):
+                price, pct = snaps.get(sym, (None, None))
+                with col:
+                    st.markdown(_ticker_card_html(label, price, pct),
+                                unsafe_allow_html=True)
 
-        mag_cols = st.columns(len(_MAG7), gap="small")
-        for col, (sym, label) in zip(mag_cols, _MAG7):
-            price, pct = snaps.get(sym, (None, None))
-            with col:
-                st.markdown(_ticker_card_html(label, price, pct),
-                            unsafe_allow_html=True)
+            # Tiny vertical spacer so the two rows breathe a bit
+            st.markdown('<div style="height:4px;"></div>',
+                        unsafe_allow_html=True)
+
+            mag_cols = st.columns(len(_MAG7), gap="small")
+            for col, (sym, label) in zip(mag_cols, _MAG7):
+                price, pct = snaps.get(sym, (None, None))
+                with col:
+                    st.markdown(_ticker_card_html(label, price, pct),
+                                unsafe_allow_html=True)
 
 with main_right:
     # ── Open Positions ────────────────────────────────────────────────────────
