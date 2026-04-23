@@ -1044,26 +1044,15 @@ with main_right:
                     "WARN": "color:#ffa500",
                     "INFO": "color:#6b8bb0"}
             st.dataframe(df_l.style.map(lambda v: LS.get(v,""), subset=["level"]),
-                         use_container_width=True, hide_index=True, height=320)
+                         use_container_width=True, hide_index=True, height=256)
             st.caption(f"{len(df_l):,} most recent entries")
         else:
             st.caption("No log entries yet.")
 
-# ── BOTTOM SECTION: Backtest + Manual Trade | Configuration ────────────────────
-
-bt_col, cfg_col = st.columns([2, 3], gap="small")
-
-# ── Backtest Engine ───────────────────────────────────────────────────────────
-with bt_col:
-    st.markdown('<div id="backtest"></div>', unsafe_allow_html=True)
+    # ── Manual Trade (No Strategy) — now lives in the right column under Logs
+    st.markdown('<div id="manual"></div>', unsafe_allow_html=True)
     with st.container(border=True):
-        bt_expanded = _panel_header("Backtest Engine", panel_key="backtest", help_md=_BT_HELP)
-        _render_backtest_panel(chart_height=260 if bt_expanded else 160)
-
-    # ── Manual Trade (No Strategy) ────────────────────────────────────────────
-    bt_col.markdown('<div id="manual"></div>', unsafe_allow_html=True)
-    with bt_col.container(border=True):
-        _panel_header("Manual Trade — No Strategy", """
+        _panel_header("Manual Trade — No Strategy", help_md="""
 **How to use:**
 - Search any symbol (e.g. TSLA) and set the quantity.
 - Choose Buy or Sell, then click **Order(…)**.
@@ -1076,18 +1065,22 @@ with bt_col:
         elif GUEST:
             st.info("👁 View-only mode — sign in with an account to place orders.")
         else:
-            mt1, mt2 = st.columns([1.4, 1])
+            mt1, mt2, mt3 = st.columns([1.5, 0.9, 1.3])
             with mt1:
                 mt_sym = st.text_input("Symbol", key="mt_sym", placeholder="e.g. TSLA").upper().strip()
             with mt2:
                 mt_qty = st.number_input("Quantity", min_value=1, step=1, key="mt_qty")
+            with mt3:
+                mt_side = st.radio("Side", ["Buy", "Sell"], horizontal=True, key="mt_side")
 
             # Live price + period-selectable mini chart when symbol entered
             mt_price: float | None = None
             if mt_sym:
-                mt_period_key = st.selectbox(
-                    "Chart period", list(_MT_PERIOD_OPTS), index=2,
-                    label_visibility="collapsed", key="mt_period")
+                info_row1, info_row2 = st.columns([2, 1])
+                with info_row2:
+                    mt_period_key = st.selectbox(
+                        "Chart period", list(_MT_PERIOD_OPTS), index=2,
+                        label_visibility="collapsed", key="mt_period")
                 mt_per, mt_iv, mt_tail = _MT_PERIOD_OPTS[mt_period_key]
                 info = _stock_info(mt_sym, mt_per, mt_iv, mt_tail)
                 if info:
@@ -1097,24 +1090,20 @@ with bt_col:
                         for sk in ["rsi", "macd", "bollinger", "ema_crossover",
                                    "momentum", "short_ma", "manual"]
                     )
-                    pi1, pi2, pi3 = st.columns(3)
-                    pi1.metric("Live Price",  f"${mt_price:,.2f}")
-                    pi2.metric("You Own",     f"{owned_qty:g} shares")
-                    pi3.metric("Period",      mt_period_key)
-                    st.plotly_chart(_stock_mini_chart(info["hist"], height=80),
+                    with info_row1:
+                        pi1, pi2 = st.columns(2)
+                        pi1.metric("Live Price", f"${mt_price:,.2f}")
+                        pi2.metric("You Own",    f"{owned_qty:g}")
+                    st.plotly_chart(_stock_mini_chart(info["hist"], height=70),
                                     use_container_width=True, config=_NO_TB)
                 else:
                     st.caption(f"No data for **{mt_sym}** — check the ticker symbol.")
 
-            mt3, mt4 = st.columns([1, 1])
-            with mt3:
-                mt_side = st.radio("Side", ["Buy", "Sell"], horizontal=True, key="mt_side")
-            with mt4:
-                if mt_price is not None:
-                    btn_label = f"Order (${mt_price * mt_qty:,.2f})"
-                else:
-                    btn_label = "Submit Paper Order"
-                submit_mt = st.button(btn_label, type="primary", use_container_width=True)
+            if mt_price is not None:
+                btn_label = f"Order (${mt_price * mt_qty:,.2f})"
+            else:
+                btn_label = "Submit Paper Order"
+            submit_mt = st.button(btn_label, type="primary", use_container_width=True)
 
             if submit_mt:
                 if not mt_sym:
@@ -1149,6 +1138,17 @@ with bt_col:
                         _stock_info.clear()
                     except Exception as ex:
                         st.error(str(ex))
+
+# ── BOTTOM SECTION: Backtest | Configuration ──────────────────────────────────
+
+bt_col, cfg_col = st.columns([1, 1], gap="small")
+
+# ── Backtest Engine ───────────────────────────────────────────────────────────
+with bt_col:
+    st.markdown('<div id="backtest"></div>', unsafe_allow_html=True)
+    with st.container(border=True):
+        bt_expanded = _panel_header("Backtest Engine", panel_key="backtest", help_md=_BT_HELP)
+        _render_backtest_panel(chart_height=280 if bt_expanded else 180)
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 if not BT_FULL:
