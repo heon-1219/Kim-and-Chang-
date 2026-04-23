@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import time
 import traceback
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
 import yfinance as yf
@@ -31,6 +31,13 @@ _BARS_PER_TRADING_DAY = 26  # 6.5 hours * 4 fifteen-minute bars
 
 # (date, {strategy_name: [symbols...]}) — rebuilt at most once per calendar day
 _PICKED_SYMBOLS: dict[str, tuple[date, list[str]]] = {}
+
+# Day-level flags so we send the premarket / open pings exactly once per session
+_WARMUP_DONE_FOR: date | None = None
+_OPEN_PING_DONE_FOR: date | None = None
+
+# Wake this many minutes before the opening bell to pick stocks and ping Telegram
+PREMARKET_WARMUP_MIN = 30
 
 
 def get_recent_prices(symbol: str, bars_needed: int) -> pd.Series:
@@ -248,6 +255,75 @@ def _picks_for(strategy_name: str, settings: dict) -> list[str]:
     return picks
 
 
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _to_utc_aware(ts: datetime) -> datetime:
+    """Coerce Alpaca's clock timestamps to tz-aware UTC for safe arithmetic."""
+    if ts.tzinfo is None:
+        return ts.replace(tzinfo=timezone.utc)
+    return ts.astimezone(timezone.utc)
+
+
+def run_premarket_warmup(settings: dict) -> None:
+    """
+    30 min before the opening bell: warm the daily picker for every active
+    strategy and ship a Telegram message listing today's picks. Safe to call
+    multiple times in a day — the picker cache guarantees one execution per
+    strategy per calendar day.
+    """
+    global _WARMUP_DONE_FOR
+    today = date.today()
+    if _WARMUP_DONE_FOR == today:
+        return
+
+    try:
+        account = broker.get_account()
+        equity  = float(account.equity)
+    except Exception as e:
+        db.log("WARN", f"Warmup: failed to fetch account ({e}); using $0 equity")
+        equity = 0.0
+
+    active = _load_active_strategies(settings, equity)
+    picks_by_strat: dict[str, list[str]] = {}
+    for strategy_name, _alloc_pct, _alloc_usd in active:
+        try:
+            picks_by_strat[strategy_name] = _picks_for(strategy_name, settings)
+        except Exception as e:
+            db.log("ERROR", f"Warmup pick failed for {strategy_name}: {e}")
+            picks_by_strat[strategy_name] = []
+
+    try:
+        clock = broker.get_clock()
+        mins  = max(
+            int((_to_utc_aware(clock.next_open) - _now_utc()).total_seconds() // 60),
+            0,
+        )
+    except Exception:
+        mins = PREMARKET_WARMUP_MIN
+
+    db.log("INFO", f"Pre-market warmup complete: picks={picks_by_strat}")
+    notifications.send_premarket_picks(picks_by_strat, mins)
+    _WARMUP_DONE_FOR = today
+
+
+def _send_open_ping_once(settings: dict) -> None:
+    """Telegram 'market open — trading live' ping, exactly once per session."""
+    global _OPEN_PING_DONE_FOR
+    today = date.today()
+    if _OPEN_PING_DONE_FOR == today:
+        return
+    try:
+        account = broker.get_account()
+        equity  = float(account.equity)
+    except Exception:
+        equity = 0.0
+    active_names = [n for n, _, _ in _load_active_strategies(settings, equity)]
+    notifications.send_market_open(active_names)
+    _OPEN_PING_DONE_FOR = today
+
+
 def run_one_cycle() -> None:
     """Run every enabled strategy across its own picked symbols."""
     settings      = db.get_all_config()
@@ -263,6 +339,9 @@ def run_one_cycle() -> None:
     if not clock.is_open:
         db.log("INFO", f"Market closed. Next open: {clock.next_open}")
         return
+
+    # First cycle after the bell → send Telegram "trading live" ping
+    _send_open_ping_once(settings)
 
     if broker.is_rate_limited():
         db.log("WARN", f"Near API rate limit, sleeping {config.RATE_LIMIT_SLEEP_SECONDS}s")
@@ -304,6 +383,49 @@ def run_one_cycle() -> None:
     db.log("INFO", "Cycle complete.")
 
 
+def _compute_sleep_seconds() -> tuple[int, str]:
+    """
+    Return (sleep_seconds, reason) based on the current market clock.
+
+    Scheduling model:
+      · Market open  → trade normally on LOOP_INTERVAL_SECONDS cadence.
+      · Closed, >30m to open  → long sleep, capped so we re-check each hour.
+      · Closed, ≤30m to open  → pre-market warmup now, then sleep to open − 1s
+                                so the first trading cycle lands at the bell.
+    """
+    try:
+        clock = broker.get_clock()
+    except Exception as e:
+        db.log("WARN", f"Clock fetch failed: {e}; defaulting to {config.LOOP_INTERVAL_SECONDS}s sleep")
+        return config.LOOP_INTERVAL_SECONDS, "clock-error"
+
+    if clock.is_open:
+        return config.LOOP_INTERVAL_SECONDS, "open-cadence"
+
+    nxt_open = _to_utc_aware(clock.next_open)
+    delta    = (nxt_open - _now_utc()).total_seconds()
+    warmup_s = PREMARKET_WARMUP_MIN * 60
+
+    if delta > warmup_s:
+        # Cap long sleeps at 1 hour so a mid-closure config change (or a
+        # manually-set Alpaca "next open") is picked up promptly.
+        sleep_s = int(min(delta - warmup_s, 3600))
+        return max(sleep_s, 10), f"closed·{int(delta/60)}m-to-open"
+
+    if delta > 0:
+        # Inside the warmup window → run picker now, sleep to the bell.
+        try:
+            run_premarket_warmup(db.get_all_config())
+        except Exception as e:
+            db.log("ERROR", f"Warmup failed: {e}\n{traceback.format_exc()}")
+        # Sleep until exactly the bell (tiny −1s buffer so we're already awake)
+        return max(int(delta) - 1, 5), "pre-open-warmup"
+
+    # delta ≤ 0 but clock says closed — likely a race around the bell.
+    # Loop again in 5 s to pick up the transition.
+    return 5, "bell-race"
+
+
 def main() -> None:
     db.init_db()
     db.log("INFO", "=== Bot starting (PAPER TRADING — multi-strategy) ===")
@@ -318,8 +440,9 @@ def main() -> None:
             db.update_heartbeat("error")
             notifications.send_alert(f"Cycle exception: {e}", "error")
 
-        db.log("INFO", f"Sleeping {config.LOOP_INTERVAL_SECONDS}s...")
-        time.sleep(config.LOOP_INTERVAL_SECONDS)
+        sleep_s, reason = _compute_sleep_seconds()
+        db.log("INFO", f"Sleeping {sleep_s}s ({reason})...")
+        time.sleep(sleep_s)
 
 
 if __name__ == "__main__":

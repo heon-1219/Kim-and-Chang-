@@ -20,6 +20,7 @@ import yfinance as yf
 
 import broker
 import db
+import notifications
 from backtest import run_backtest
 from strategies import STRATEGIES
 
@@ -481,6 +482,36 @@ def _demo_ph() -> pd.DataFrame:
     return pd.DataFrame({"date": rng, "equity": vals})
 
 
+def _send_bt_to_telegram(bt_result: dict, strategy: str, symbols: list[str],
+                         interval: str, start, end, inline: bool = False) -> None:
+    """
+    Ship the current backtest result to Telegram with a strategy-vs-hold verdict.
+    `inline=True` surfaces success/failure toast inside the backtest panel.
+    """
+    metrics = bt_result.get("metrics", {})
+    hold_df = bt_result.get("buy_and_hold_curve")
+    hold_ret: float | None = None
+    try:
+        if hold_df is not None and not hold_df.empty:
+            start_eq = float(hold_df["equity"].iloc[0])
+            end_eq   = float(hold_df["equity"].iloc[-1])
+            if start_eq > 0:
+                hold_ret = (end_eq - start_eq) / start_eq * 100
+    except Exception:
+        hold_ret = None
+
+    ok = notifications.send_backtest_result(
+        strategy=strategy, symbols=symbols, interval=interval,
+        start=str(start), end=str(end),
+        metrics=metrics, buy_and_hold_return_pct=hold_ret,
+    )
+    if inline:
+        if ok:
+            st.toast("📲 Backtest summary sent to Telegram", icon="✅")
+        else:
+            st.toast("Telegram not configured or send failed — check .env", icon="⚠️")
+
+
 _BT_HELP = """
 **How to use:**
 1. Enter one or more symbols (e.g. `AAPL` or `AAPL, MSFT, GOOGL`), choose a strategy,
@@ -581,17 +612,25 @@ def _render_backtest_panel(chart_height: int) -> None:
             bt_strat_cfg = {}
     bt_settings = {**cfg, **bt_strat_cfg}
 
-    run_c, add_c, clr_c = st.columns([2, 1, 1])
+    run_c, add_c, tg_c, clr_c = st.columns([2, 1, 1, 1])
     with run_c:
         run_bt = st.button("▶  Run Backtest", type="primary", use_container_width=True)
     with add_c:
         add_bt = st.button("＋ Compare", use_container_width=True,
                            disabled="bt" not in st.session_state)
+    with tg_c:
+        send_tg = st.button("📲 Telegram", use_container_width=True,
+                            disabled="bt" not in st.session_state,
+                            help="Send the latest backtest summary to Telegram")
     with clr_c:
         if st.button("✕ Clear", use_container_width=True):
             st.session_state.pop("bt", None)
             st.session_state.pop("bt_compare", None)
             st.rerun()
+
+    auto_tg = st.checkbox(
+        "Auto-send backtest summary to Telegram on every run",
+        value=st.session_state.get("bt_auto_tg", False), key="bt_auto_tg")
 
     if run_bt:
         if s_bt >= e_bt:
@@ -616,11 +655,21 @@ def _render_backtest_panel(chart_height: int) -> None:
                     if st.session_state["bt"].get("errors"):
                         for err in st.session_state["bt"]["errors"]:
                             st.warning(err)
+                    if auto_tg:
+                        _send_bt_to_telegram(st.session_state["bt"],
+                                             strat_name, syms_clean, bt_interval,
+                                             s_bt, e_bt, inline=True)
                 except Exception as ex:
                     import traceback
                     st.error(f"{type(ex).__name__}: {ex}")
                     with st.expander("Traceback", expanded=True):
                         st.code(traceback.format_exc(), language="python")
+
+    if send_tg and "bt" in st.session_state:
+        _send_bt_to_telegram(st.session_state["bt"],
+                             str(strat_bt),
+                             [str(s).strip().upper() for s in sym_bt_list],
+                             bt_interval, s_bt, e_bt, inline=True)
 
     if add_bt and "bt" in st.session_state:
         comp = st.session_state.setdefault("bt_compare", {})
@@ -1129,8 +1178,6 @@ if not BT_FULL:
                        f"[DASHBOARD] Kill switch turned {'ON' if ne else 'OFF'} by {uname}")
                 st.rerun()
 
-            st.markdown("---")
-
             # ── Strategy Allocation ───────────────────────────────────────────
             st.markdown("**Strategy Allocation**")
             st.caption(
@@ -1192,60 +1239,98 @@ if not BT_FULL:
             idle_usd    = max(eq - total_usd, 0)
             over_by     = max(total_usd - eq, 0)
             alloc_ok    = total_usd <= eq
-            st.metric("Total allocated", f"${total_usd:,.0f}",
-                      delta=(f"${idle_usd:,.0f} idle cash" if alloc_ok
-                             else f"⚠ Over by ${over_by:,.0f}"),
-                      delta_color="normal" if alloc_ok else "inverse")
 
-            top_n = st.number_input(
-                "Top-N stocks per strategy (picked daily from S&P 500)",
-                min_value=1, max_value=100,
-                value=int(cfg.get("picker_top_n", "10")),
-                step=1, disabled=GUEST,
-                help="Each enabled strategy ranks S&P 500 names and trades its top-N per day.")
+            # Compact status row: allocation summary + top-N picker (was two rows)
+            sm1, sm2 = st.columns([1.3, 1])
+            with sm1:
+                st.metric("Total allocated", f"${total_usd:,.0f}",
+                          delta=(f"${idle_usd:,.0f} idle cash" if alloc_ok
+                                 else f"⚠ Over by ${over_by:,.0f}"),
+                          delta_color="normal" if alloc_ok else "inverse")
+            with sm2:
+                top_n = st.number_input(
+                    "Top-N / strategy", min_value=1, max_value=100,
+                    value=int(cfg.get("picker_top_n", "10")), step=1, disabled=GUEST,
+                    help="Each enabled strategy ranks S&P 500 names and trades "
+                         "its top-N per day.")
 
-            st.markdown("---")
+            # ── Popovers: Strategy Parameters, Risk Limits, Save ──────────────
+            pv1, pv2, pv3 = st.columns([1.2, 1.2, 1])
+            with pv1:
+                with st.popover("⚙ Strategy Parameters",
+                                use_container_width=True, disabled=GUEST):
+                    st.caption("Tune indicator settings for each strategy. "
+                               "Enabled strategies' tabs open first.")
+                    tab_order = sorted(STRATEGIES.keys(),
+                                       key=lambda k: (k not in enabled_strats, k))
+                    TAB_LABELS = {"rsi":"RSI","macd":"MACD","bollinger":"Bollinger",
+                                  "ema_crossover":"EMA","momentum":"Momentum",
+                                  "short_ma":"Short MA"}
+                    param_tabs = st.tabs([TAB_LABELS.get(k, k.upper()) for k in tab_order])
+                    param_vals: dict = {}
+                    for tab, key in zip(param_tabs, tab_order):
+                        with tab:
+                            if key == "rsi":
+                                c1,c2,c3 = st.columns(3)
+                                with c1: param_vals["rsi_period"]     = st.number_input("Period",     2,  50, int(cfg.get("rsi_period",14)),         key="rsi_p",   disabled=GUEST)
+                                with c2: param_vals["rsi_oversold"]   = st.number_input("Oversold",  10., 50., float(cfg.get("rsi_oversold",30)),    step=1., key="rsi_ov",  disabled=GUEST)
+                                with c3: param_vals["rsi_overbought"] = st.number_input("Overbought",50., 90., float(cfg.get("rsi_overbought",70)),  step=1., key="rsi_ob",  disabled=GUEST)
+                            elif key == "macd":
+                                c1,c2,c3 = st.columns(3)
+                                with c1: param_vals["macd_fast"]   = st.number_input("Fast",  2,  50, int(cfg.get("macd_fast",12)),  key="macd_f", disabled=GUEST)
+                                with c2: param_vals["macd_slow"]   = st.number_input("Slow",  5, 100, int(cfg.get("macd_slow",26)),  key="macd_s", disabled=GUEST)
+                                with c3: param_vals["macd_signal"] = st.number_input("Signal",2,  50, int(cfg.get("macd_signal",9)), key="macd_g", disabled=GUEST)
+                            elif key == "bollinger":
+                                c1,c2 = st.columns(2)
+                                with c1: param_vals["bb_window"] = st.number_input("Window",5,100, int(cfg.get("bb_window",20)),            key="bb_w", disabled=GUEST)
+                                with c2: param_vals["bb_std"]    = st.number_input("Std Dev",.5,5.0, float(cfg.get("bb_std",2.0)), step=.5, key="bb_s", disabled=GUEST)
+                            elif key == "ema_crossover":
+                                c1,c2 = st.columns(2)
+                                with c1: param_vals["ema_fast"] = st.number_input("Fast EMA",2, 50, int(cfg.get("ema_fast",9)),  key="ema_f", disabled=GUEST)
+                                with c2: param_vals["ema_slow"] = st.number_input("Slow EMA",5,200, int(cfg.get("ema_slow",21)), key="ema_s", disabled=GUEST)
+                            elif key == "momentum":
+                                c1,c2 = st.columns(2)
+                                with c1: param_vals["momentum_window"]    = st.number_input("Window (bars)", 1, 20, int(cfg.get("momentum_window",3)),          key="mom_w",  disabled=GUEST)
+                                with c2: param_vals["momentum_threshold"] = st.number_input("Threshold %", 0.05,5.0, float(cfg.get("momentum_threshold",0.3)), step=0.05, key="mom_th", disabled=GUEST)
+                            elif key == "short_ma":
+                                c1,c2 = st.columns(2)
+                                with c1: param_vals["short_ma_fast"] = st.number_input("Fast window", 2, 30, int(cfg.get("short_ma_fast",5)),   key="sma_f", disabled=GUEST)
+                                with c2: param_vals["short_ma_slow"] = st.number_input("Slow window", 5, 60, int(cfg.get("short_ma_slow",15)),  key="sma_s", disabled=GUEST)
 
-            # ── Strategy Parameters (all strategies) ──────────────────────────
-            st.markdown("**Strategy Parameters**")
-            with st.expander("RSI", expanded=("rsi" in enabled_strats)):
-                c1,c2,c3 = st.columns(3)
-                with c1: p  = st.number_input("Period",     2,  50, int(cfg.get("rsi_period",14)),    key="rsi_p",  disabled=GUEST)
-                with c2: ov = st.number_input("Oversold",  10., 50., float(cfg.get("rsi_oversold",30)),  step=1., key="rsi_ov", disabled=GUEST)
-                with c3: ob = st.number_input("Overbought",50., 90., float(cfg.get("rsi_overbought",70)),step=1., key="rsi_ob", disabled=GUEST)
-            with st.expander("MACD", expanded=("macd" in enabled_strats)):
-                c1,c2,c3 = st.columns(3)
-                with c1: mf  = st.number_input("Fast",  2,  50, int(cfg.get("macd_fast",12)),    key="macd_f", disabled=GUEST)
-                with c2: ms  = st.number_input("Slow",  5, 100, int(cfg.get("macd_slow",26)),    key="macd_s", disabled=GUEST)
-                with c3: msg = st.number_input("Signal",2,  50, int(cfg.get("macd_signal",9)),   key="macd_g", disabled=GUEST)
-            with st.expander("Bollinger Bands", expanded=("bollinger" in enabled_strats)):
-                c1,c2 = st.columns(2)
-                with c1: bw = st.number_input("Window",5,100,int(cfg.get("bb_window",20)),          key="bb_w", disabled=GUEST)
-                with c2: bs = st.number_input("Std Dev",.5,5.0,float(cfg.get("bb_std",2.0)),step=.5,key="bb_s", disabled=GUEST)
-            with st.expander("EMA Crossover", expanded=("ema_crossover" in enabled_strats)):
-                c1,c2 = st.columns(2)
-                with c1: ef = st.number_input("Fast EMA",2, 50, int(cfg.get("ema_fast",9)),  key="ema_f", disabled=GUEST)
-                with c2: es = st.number_input("Slow EMA",5,200, int(cfg.get("ema_slow",21)), key="ema_s", disabled=GUEST)
-            with st.expander("Momentum (ROC)", expanded=("momentum" in enabled_strats)):
-                c1,c2 = st.columns(2)
-                with c1: mw  = st.number_input("Window (bars)", 1, 20,  int(cfg.get("momentum_window",3)),          key="mom_w", disabled=GUEST)
-                with c2: mth = st.number_input("Threshold %",  0.05, 5.0, float(cfg.get("momentum_threshold",0.3)), step=0.05, key="mom_th", disabled=GUEST)
-            with st.expander("Short MA Crossover", expanded=("short_ma" in enabled_strats)):
-                c1,c2 = st.columns(2)
-                with c1: smf = st.number_input("Fast window", 2, 30, int(cfg.get("short_ma_fast",5)),   key="sma_f", disabled=GUEST)
-                with c2: sms = st.number_input("Slow window", 5, 60, int(cfg.get("short_ma_slow",15)),  key="sma_s", disabled=GUEST)
+            with pv2:
+                with st.popover("⚠ Risk Limits",
+                                use_container_width=True, disabled=GUEST):
+                    st.caption("Global caps applied across all strategies.")
+                    rl1, rl2 = st.columns(2)
+                    with rl1:
+                        pct_r   = st.number_input("Position size %",    .5, 25., float(cfg.get("position_pct",5.)),         step=.5, disabled=GUEST)
+                        mpos_r  = st.number_input("Max positions",      1,  20,  int(cfg.get("max_positions",4)),                    disabled=GUEST)
+                    with rl2:
+                        dloss_r = st.number_input("Daily loss limit %", .5, 20., float(cfg.get("daily_loss_limit_pct",2.)), step=.5, disabled=GUEST)
+                        mdd_r   = st.number_input("Max drawdown %",     1., 50., float(cfg.get("max_drawdown_pct",10.)),    step=1., disabled=GUEST)
 
-            st.markdown("---")
+            # Unpack strategy params so the save handler signature stays identical
+            p    = param_vals.get("rsi_period",     int(cfg.get("rsi_period",14)))
+            ov   = param_vals.get("rsi_oversold",   float(cfg.get("rsi_oversold",30)))
+            ob   = param_vals.get("rsi_overbought", float(cfg.get("rsi_overbought",70)))
+            mf   = param_vals.get("macd_fast",      int(cfg.get("macd_fast",12)))
+            ms   = param_vals.get("macd_slow",      int(cfg.get("macd_slow",26)))
+            msg  = param_vals.get("macd_signal",    int(cfg.get("macd_signal",9)))
+            bw   = param_vals.get("bb_window",      int(cfg.get("bb_window",20)))
+            bs   = param_vals.get("bb_std",         float(cfg.get("bb_std",2.0)))
+            ef   = param_vals.get("ema_fast",       int(cfg.get("ema_fast",9)))
+            es   = param_vals.get("ema_slow",       int(cfg.get("ema_slow",21)))
+            mw   = param_vals.get("momentum_window",    int(cfg.get("momentum_window",3)))
+            mth  = param_vals.get("momentum_threshold", float(cfg.get("momentum_threshold",0.3)))
+            smf  = param_vals.get("short_ma_fast",  int(cfg.get("short_ma_fast",5)))
+            sms  = param_vals.get("short_ma_slow",  int(cfg.get("short_ma_slow",15)))
 
-            # ── Risk Limits ───────────────────────────────────────────────────
-            st.markdown("**Risk Limits** *(applied globally across all strategies)*")
-            rl1, rl2, rl3, rl4 = st.columns(4)
-            with rl1: pct_r   = st.number_input("Position size %",  .5, 25., float(cfg.get("position_pct",5.)),        step=.5, disabled=GUEST)
-            with rl2: dloss_r = st.number_input("Daily loss limit %",.5, 20., float(cfg.get("daily_loss_limit_pct",2.)),step=.5, disabled=GUEST)
-            with rl3: mpos_r  = st.number_input("Max positions",     1,  20,  int(cfg.get("max_positions",4)),                  disabled=GUEST)
-            with rl4: mdd_r   = st.number_input("Max drawdown %",   1., 50., float(cfg.get("max_drawdown_pct",10.)),   step=1., disabled=GUEST)
+            with pv3:
+                save_clicked = st.button(
+                    "💾 Save", type="primary",
+                    use_container_width=True, disabled=GUEST)
 
-            if st.button("Save Configuration", type="primary", use_container_width=True, disabled=GUEST):
+            if save_clicked:
                 # Auto-split idle cash across enabled strategies that have $0
                 final_alloc = {k: dict(v) for k, v in new_alloc.items()}
                 zero_enabled_k = [k for k in enabled_strats
