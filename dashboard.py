@@ -1016,40 +1016,48 @@ with main_left:
                         use_container_width=True, config=_NO_TB)
 
     # ── Market Ticker (indices + Magnificent 7) ───────────────────────────────
-    # Constrain horizontally with a 5:1 sub-split so the panel's width matches
-    # the Backtest Engine column below (main_left is 60% of page, Backtest is
-    # 50%; 5/6 of main_left ≈ 50%).
+    # Fills the full main_left width — Backtest now lives in the same column
+    # directly below, so widths align naturally.
     st.markdown('<div id="market"></div>', unsafe_allow_html=True)
-    ms_col, _ms_pad = st.columns([5, 1], gap="small")
-    with ms_col:
-        with st.container(border=True):
-            st.markdown(
-                '<p style="font-size:0.6rem;font-weight:600;letter-spacing:0.1em;'
-                'color:#00d4aa;text-transform:uppercase;margin:0 0 6px;">'
-                'Market Snapshot '
-                '<span style="color:#4a6a90;font-weight:400;letter-spacing:0;">'
-                '· indices + Mag 7 · daily %</span></p>',
-                unsafe_allow_html=True)
-            all_syms = tuple(s for s, _ in _MARKET_INDICES) + tuple(s for s, _ in _MAG7)
-            snaps = _ticker_snapshots(all_syms)
+    with st.container(border=True):
+        # Pad top/bottom so the global `[data-testid="stVerticalBlockBorderWrapper"]
+        # { padding: 0 }` rule doesn't clip the title or cards.
+        st.markdown(
+            '<div style="padding:8px 4px 4px;">'
+            '<p style="font-size:0.62rem;font-weight:600;letter-spacing:0.1em;'
+            'color:#00d4aa;text-transform:uppercase;margin:0 0 8px;">'
+            'Market Snapshot '
+            '<span style="color:#4a6a90;font-weight:400;letter-spacing:0;">'
+            '· indices + Mag 7 · daily %</span></p></div>',
+            unsafe_allow_html=True)
+        all_syms = tuple(s for s, _ in _MARKET_INDICES) + tuple(s for s, _ in _MAG7)
+        snaps = _ticker_snapshots(all_syms)
 
-            idx_cols = st.columns(len(_MARKET_INDICES), gap="small")
-            for col, (sym, label) in zip(idx_cols, _MARKET_INDICES):
-                price, pct = snaps.get(sym, (None, None))
-                with col:
-                    st.markdown(_ticker_card_html(label, price, pct),
-                                unsafe_allow_html=True)
+        idx_cols = st.columns(len(_MARKET_INDICES), gap="small")
+        for col, (sym, label) in zip(idx_cols, _MARKET_INDICES):
+            price, pct = snaps.get(sym, (None, None))
+            with col:
+                st.markdown(_ticker_card_html(label, price, pct),
+                            unsafe_allow_html=True)
 
-            # Tiny vertical spacer so the two rows breathe a bit
-            st.markdown('<div style="height:4px;"></div>',
-                        unsafe_allow_html=True)
+        # Vertical breathing room between indices and Mag 7 rows
+        st.markdown('<div style="height:8px;"></div>', unsafe_allow_html=True)
 
-            mag_cols = st.columns(len(_MAG7), gap="small")
-            for col, (sym, label) in zip(mag_cols, _MAG7):
-                price, pct = snaps.get(sym, (None, None))
-                with col:
-                    st.markdown(_ticker_card_html(label, price, pct),
-                                unsafe_allow_html=True)
+        mag_cols = st.columns(len(_MAG7), gap="small")
+        for col, (sym, label) in zip(mag_cols, _MAG7):
+            price, pct = snaps.get(sym, (None, None))
+            with col:
+                st.markdown(_ticker_card_html(label, price, pct),
+                            unsafe_allow_html=True)
+
+        # Bottom spacer so the last row isn't clipped by the border
+        st.markdown('<div style="height:6px;"></div>', unsafe_allow_html=True)
+
+    # ── Backtest Engine (now in left column, flowing after Market Snapshot) ──
+    st.markdown('<div id="backtest"></div>', unsafe_allow_html=True)
+    with st.container(border=True):
+        bt_expanded = _panel_header("Backtest Engine", panel_key="backtest", help_md=_BT_HELP)
+        _render_backtest_panel(chart_height=280 if bt_expanded else 180)
 
 with main_right:
     # ── Open Positions ────────────────────────────────────────────────────────
@@ -1263,21 +1271,11 @@ with main_right:
                     except Exception as ex:
                         st.error(str(ex))
 
-# ── BOTTOM SECTION: Backtest | Configuration ──────────────────────────────────
+# ── Configuration (appended to the right column, directly under Manual Trade) ─
 
-bt_col, cfg_col = st.columns([1, 1], gap="small")
-
-# ── Backtest Engine ───────────────────────────────────────────────────────────
-with bt_col:
-    st.markdown('<div id="backtest"></div>', unsafe_allow_html=True)
-    with st.container(border=True):
-        bt_expanded = _panel_header("Backtest Engine", panel_key="backtest", help_md=_BT_HELP)
-        _render_backtest_panel(chart_height=280 if bt_expanded else 180)
-
-# ── Configuration ─────────────────────────────────────────────────────────────
 if not BT_FULL:
-    cfg_col.markdown('<div id="config"></div>', unsafe_allow_html=True)
-    with cfg_col.container(border=True):
+    main_right.markdown('<div id="config"></div>', unsafe_allow_html=True)
+    with main_right.container(border=True):
         _panel_header("Configuration", help_md="""
 **How to use:**
 - **Trading enabled** — master kill switch. Disable to halt all bot activity immediately.
