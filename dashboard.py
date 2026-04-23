@@ -285,6 +285,85 @@ def _portfolio_history(period: str = "1D", timeframe: str = "1D") -> pd.DataFram
             continue
     return None
 
+_MARKET_INDICES = [
+    ("^GSPC", "S&P 500"),
+    ("^IXIC", "Nasdaq"),
+    ("^DJI",  "Dow"),
+    ("^RUT",  "Russell"),
+    ("^VIX",  "VIX"),
+]
+
+_MAG7 = [
+    ("AAPL",  "AAPL"),
+    ("MSFT",  "MSFT"),
+    ("GOOGL", "GOOGL"),
+    ("AMZN",  "AMZN"),
+    ("META",  "META"),
+    ("NVDA",  "NVDA"),
+    ("TSLA",  "TSLA"),
+]
+
+
+@st.cache_data(ttl=60)
+def _ticker_snapshots(symbols: tuple[str, ...]) -> dict[str, tuple[float, float]]:
+    """
+    Batch-fetch latest + previous close for each symbol.
+    Returns {symbol: (latest_price, change_pct)}. Missing symbols are absent.
+    """
+    if not symbols:
+        return {}
+    try:
+        data = yf.download(list(symbols), period="5d", interval="1d",
+                           auto_adjust=True, progress=False,
+                           group_by="ticker", threads=True)
+    except Exception:
+        return {}
+    out: dict[str, tuple[float, float]] = {}
+    for sym in symbols:
+        try:
+            if len(symbols) == 1:
+                closes = data["Close"].dropna()
+            else:
+                closes = data[sym]["Close"].dropna()
+            if len(closes) < 2:
+                continue
+            latest = float(closes.iloc[-1])
+            prev   = float(closes.iloc[-2])
+            pct    = (latest - prev) / prev * 100 if prev else 0.0
+            out[sym] = (latest, pct)
+        except Exception:
+            continue
+    return out
+
+
+def _ticker_card_html(label: str, price: float | None, pct: float | None) -> str:
+    """Compact card for the market ticker strip."""
+    if price is None or pct is None:
+        return (
+            '<div style="background:#0d1526;border:1px solid #1e3a5f;'
+            'border-radius:5px;padding:5px 8px;text-align:center;">'
+            f'<div style="font-size:0.58rem;letter-spacing:0.08em;'
+            f'color:#6b8bb0;text-transform:uppercase;">{label}</div>'
+            '<div style="font-size:0.82rem;color:#4a6a90;font-weight:600;'
+            'margin-top:1px;">—</div>'
+            '<div style="font-size:0.6rem;color:#4a6a90;">n/a</div>'
+            '</div>'
+        )
+    color  = "#00c896" if pct >= 0 else "#ff4b4b"
+    arrow  = "▲" if pct >= 0 else "▼"
+    return (
+        '<div style="background:#0d1526;border:1px solid #1e3a5f;'
+        'border-radius:5px;padding:5px 8px;text-align:center;">'
+        f'<div style="font-size:0.58rem;letter-spacing:0.08em;'
+        f'color:#6b8bb0;text-transform:uppercase;">{label}</div>'
+        f'<div style="font-size:0.82rem;color:#e2e8f0;font-weight:600;'
+        f'margin-top:1px;">${price:,.2f}</div>'
+        f'<div style="font-size:0.6rem;color:{color};font-weight:600;">'
+        f'{arrow} {pct:+.2f}%</div>'
+        '</div>'
+    )
+
+
 @st.cache_data(ttl=30)
 def _stock_info(symbol: str, period: str = "1d", interval: str = "15m",
                 tail: int = 0) -> dict | None:
@@ -926,6 +1005,31 @@ with main_left:
         st.plotly_chart(_trades_fig(trades, filt or None,
                                     height=440 if tr_expanded else 280),
                         use_container_width=True, config=_NO_TB)
+
+    # ── Market Ticker (indices + Magnificent 7) ───────────────────────────────
+    st.markdown('<div id="market"></div>', unsafe_allow_html=True)
+    with st.container(border=True):
+        _panel_header("Market Snapshot", help_md="""
+Real-time daily close + daily %-change via Yahoo Finance.
+Top row: major US indices. Bottom row: Magnificent 7 mega-cap tech.
+Data refreshes once per minute (cache TTL 60s).
+        """)
+        all_syms = tuple(s for s, _ in _MARKET_INDICES) + tuple(s for s, _ in _MAG7)
+        snaps = _ticker_snapshots(all_syms)
+
+        idx_cols = st.columns(len(_MARKET_INDICES))
+        for col, (sym, label) in zip(idx_cols, _MARKET_INDICES):
+            price, pct = snaps.get(sym, (None, None))
+            with col:
+                st.markdown(_ticker_card_html(label, price, pct),
+                            unsafe_allow_html=True)
+
+        mag_cols = st.columns(len(_MAG7))
+        for col, (sym, label) in zip(mag_cols, _MAG7):
+            price, pct = snaps.get(sym, (None, None))
+            with col:
+                st.markdown(_ticker_card_html(label, price, pct),
+                            unsafe_allow_html=True)
 
 with main_right:
     # ── Open Positions ────────────────────────────────────────────────────────
