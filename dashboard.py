@@ -79,32 +79,69 @@ header[data-testid="stHeader"] { display:none !important; }
 [data-testid="stToolbar"]       { display:none !important; }
 [data-testid="stSidebarCollapsedControl"] { display:none; }
 
-/* ── Layout ── */
-.block-container { max-width:100% !important; padding:0.2rem 0.6rem 0.4rem !important; }
-hr { border-color:#1e3a5f !important; margin:0.25rem 0 !important; }
+/* ── Layout (tight) ── */
+.block-container { max-width:100% !important; padding:0.1rem 0.5rem 0.25rem !important; }
+hr, [data-testid="stDivider"] { border-color:#1e3a5f !important; margin:0.15rem 0 !important; }
 [data-testid="stVerticalBlockBorderWrapper"] { border-radius:6px !important; }
 
-/* ── Metric sizing (–30%) ── */
+/* Bordered container inner padding (default ~1rem → 0.45rem) */
+[data-testid="stVerticalBlockBorderWrapper"] > div > div[data-testid="stVerticalBlock"] {
+    gap: 0.35rem !important;
+}
+[data-testid="stVerticalBlockBorderWrapper"] { padding: 0 !important; }
+div[data-testid="stVerticalBlock"] > div.element-container { margin-bottom: 0 !important; }
+
+/* Column gaps and vertical block gaps — tighten */
+div[data-testid="stHorizontalBlock"] { gap: 0.4rem !important; }
+div[data-testid="stVerticalBlock"]   { gap: 0.25rem !important; }
+
+/* Main markdown blocks: trim paragraph spacing */
+[data-testid="stMarkdownContainer"] p { margin-bottom: 0.15rem !important; }
+
+/* Expander spacing */
+[data-testid="stExpander"] { margin: 0.15rem 0 !important; }
+[data-testid="stExpander"] details > div { padding-top: 0.3rem !important; }
+
+/* Inputs: reduce label/top padding */
+[data-testid="stWidgetLabel"] { margin-bottom: 0.12rem !important; font-size: 0.7rem !important; }
+[data-baseweb="input"] input, [data-baseweb="select"] { min-height: 30px !important; }
+[data-testid="stNumberInput"] button { padding: 2px 6px !important; }
+
+/* Buttons: slimmer */
+.stButton button { padding: 0.25rem 0.55rem !important; min-height: 30px !important; }
+
+/* Tabs: tighter */
+[data-baseweb="tab-list"] { gap: 0.25rem !important; }
+[data-baseweb="tab"] { padding: 0.25rem 0.65rem !important; }
+
+/* Metric sizing (–30%) */
 [data-testid="stMetricLabel"] > div { text-transform:uppercase; font-size:0.55rem !important; letter-spacing:0.07em; }
 [data-testid="stMetricValue"]       { font-size:0.95rem !important; }
 [data-testid="stMetricDelta"]       { font-size:0.58rem !important; }
+[data-testid="stMetric"]            { padding: 0.15rem 0.4rem !important; }
+
+/* Dataframes: slimmer header */
+[data-testid="stDataFrame"] { padding: 0 !important; }
+
+/* Plotly: kill default top margin */
+.js-plotly-plot { margin-top: 0 !important; }
 
 /* ── Mobile nav (hidden on desktop) ── */
 .kc-nav { display:none; }
 @media (max-width:768px) {
   .kc-nav {
-    display:flex; overflow-x:auto; gap:5px; padding:5px 2px 6px;
+    display:flex; overflow-x:auto; gap:5px; padding:4px 2px 5px;
     background:#0d1526; border:1px solid #1e3a5f; border-radius:6px;
-    margin-bottom:6px; -webkit-overflow-scrolling:touch; scrollbar-width:none;
+    margin-bottom:4px; -webkit-overflow-scrolling:touch; scrollbar-width:none;
   }
   .kc-nav::-webkit-scrollbar { display:none; }
   .kc-nav a {
     color:#6b8bb0; text-decoration:none; font-size:0.68rem;
-    padding:4px 10px; border-radius:4px; border:1px solid #1e3a5f;
+    padding:3px 10px; border-radius:4px; border:1px solid #1e3a5f;
     flex-shrink:0; white-space:nowrap;
   }
   .kc-nav a:active { color:#00d4aa; border-color:#00d4aa; }
-  .block-container { padding-bottom:10px !important; }
+  .block-container { padding-bottom:8px !important; }
 }
 </style>""", unsafe_allow_html=True)
 
@@ -402,12 +439,28 @@ _BT_HELP = """
 1. Enter one or more symbols (e.g. `AAPL` or `AAPL, MSFT, GOOGL`), choose a strategy,
    set a date range and starting capital. For multi-symbol runs the capital is split
    evenly and the strategy runs independently per symbol.
-2. Click **Run Backtest**. Results appear below. Data sourced from Yahoo Finance (free).
-3. A dashed grey **Buy & Hold** line shows what holding the same basket passively would have returned.
-4. Click **Add to comparison** to store a result, then run another backtest to compare curves.
-5. Click **Clear** to reset stored comparisons.
-6. Click the **⤢** top-right to enter fullscreen for a much larger chart; **⤡** to collapse.
+2. Pick a **Bar interval** — daily for swing testing, or intraday (1m–1h) for
+   high-frequency testing. Intraday data has yfinance window caps:
+   · **1m** → last 7 days · **5/15/30m** → last 60 days · **1h** → last 730 days.
+3. Click **Run Backtest**. Results appear below. Data sourced from Yahoo Finance (free).
+4. A dashed grey **Buy & Hold** line shows what holding the same basket passively would have returned.
+5. Click **Add to comparison** to store a result, then run another backtest to compare curves.
+6. Click **Clear** to reset stored comparisons.
+7. Click the **⤢** top-right to enter fullscreen for a much larger chart; **⤡** to collapse.
 """
+
+_BT_INTERVALS: dict[str, str] = {
+    "1 Day (swing)":  "1d",
+    "1 Hour (HFT)":   "1h",
+    "30 Min (HFT)":   "30m",
+    "15 Min (HFT)":   "15m",
+    "5 Min (HFT)":    "5m",
+    "1 Min (HFT)":    "1m",
+}
+
+_BT_INTERVAL_MAX_DAYS: dict[str, int | None] = {
+    "1d": None, "1h": 729, "30m": 59, "15m": 59, "5m": 59, "1m": 7,
+}
 
 
 def _render_backtest_panel(chart_height: int) -> None:
@@ -420,16 +473,27 @@ def _render_backtest_panel(chart_height: int) -> None:
         st.info("👁 View-only mode — sign in to run backtests.")
         return
 
-    b1, b2 = st.columns(2)
+    b1, b2 = st.columns([3, 2])
     with b1:
         sym_bt_raw = st.text_input("Symbols (comma-separated)", "AAPL",
                                    placeholder="AAPL, MSFT, GOOGL")
         sym_bt_list = [s.strip().upper() for s in sym_bt_raw.split(",") if s.strip()]
     with b2:
         strat_bt = st.selectbox("Strategy", list(STRATEGIES.keys()))
-    b3, b4 = st.columns(2)
-    with b3: s_bt = st.date_input("Start", date(2024,1,1))
-    with b4: e_bt = st.date_input("End",   date.today())
+
+    b3, b4, b5 = st.columns([1, 1, 1.2])
+    with b3: bt_interval_lbl = st.selectbox(
+        "Bar interval", list(_BT_INTERVALS.keys()), index=0,
+        help="Daily for swing, 1m–1h for high-frequency. Intraday has history caps.")
+    bt_interval = _BT_INTERVALS[bt_interval_lbl]
+    # Default end date is today for all intervals; default start shortens for HFT
+    # so we land inside the yfinance window.
+    _max_d = _BT_INTERVAL_MAX_DAYS.get(bt_interval)
+    _def_start = (date.today() - timedelta(days=min(_max_d, 30)) if _max_d
+                  else date(2024, 1, 1))
+    with b4: s_bt = st.date_input("Start", _def_start, key=f"bt_start_{bt_interval}")
+    with b5: e_bt = st.date_input("End",   date.today(), key=f"bt_end_{bt_interval}")
+
     cap_bt = st.number_input("Starting capital ($)", value=100_000, step=10_000)
 
     # Per-strategy parameter overrides for this backtest run
@@ -488,19 +552,28 @@ def _render_backtest_panel(chart_height: int) -> None:
         elif not sym_bt_list:
             st.error("Enter at least one symbol.")
         else:
-            with st.spinner(f"Running {strat_bt.upper()} on {', '.join(sym_bt_list)}…"):
+            # Defensive coercion: make sure every downstream consumer sees
+            # a flat list of uppercase strings and a str strategy name.
+            syms_clean = [str(s).strip().upper() for s in sym_bt_list
+                          if str(s).strip()]
+            strat_name = str(strat_bt)
+            with st.spinner(f"Running {strat_name.upper()} on {', '.join(syms_clean)}…"):
                 try:
                     st.session_state["bt"] = run_backtest(
-                        sym_bt_list, strat_bt, s_bt, e_bt, float(cap_bt), bt_settings)
-                    label_syms = (sym_bt_list[0] if len(sym_bt_list) == 1
-                                  else f"{len(sym_bt_list)} syms")
+                        syms_clean, strat_name, s_bt, e_bt,
+                        float(cap_bt), bt_settings, interval=bt_interval)
+                    label_syms = (syms_clean[0] if len(syms_clean) == 1
+                                  else f"{len(syms_clean)} syms")
                     st.session_state["bt_lbl"] = (
-                        f"{label_syms}·{strat_bt.upper()}·{s_bt}→{e_bt}")
+                        f"{label_syms}·{strat_name.upper()}·{bt_interval}·{s_bt}→{e_bt}")
                     if st.session_state["bt"].get("errors"):
                         for err in st.session_state["bt"]["errors"]:
                             st.warning(err)
                 except Exception as ex:
-                    st.error(str(ex))
+                    import traceback
+                    st.error(f"{type(ex).__name__}: {ex}")
+                    with st.expander("Traceback", expanded=True):
+                        st.code(traceback.format_exc(), language="python")
 
     if add_bt and "bt" in st.session_state:
         comp = st.session_state.setdefault("bt_compare", {})
@@ -640,7 +713,6 @@ with right_hdr:
 # ── Backtest fullscreen mode: render only the backtest and halt the script ──
 
 if BT_FULL:
-    st.divider()
     st.markdown('<div id="backtest"></div>', unsafe_allow_html=True)
     with st.container(border=True):
         bt_expanded = _panel_header("Backtest Engine", panel_key="backtest", help_md=_BT_HELP)
@@ -663,7 +735,6 @@ if BT_FULL:
 # ── ACCOUNT METRICS ───────────────────────────────────────────────────────────
 
 if not BT_FULL:
-    st.divider()
     st.markdown("""<div class="kc-nav">
   <a href="#equity">📈 Equity</a>
   <a href="#trades">📊 Trades</a>
@@ -679,11 +750,10 @@ if not BT_FULL:
     m2.metric("Cash Available",     f"${cash:,.2f}")
     m3.metric("Buying Power",       f"${bp:,.2f}")
     m4.metric("Today P&L",         f"${pnl:+,.2f}", delta=f"{pp:+.2f}%")
-    st.divider()
 
 # ── MAIN SECTION: charts (left) | data panels (right) ─────────────────────────
 
-main_left, main_right = st.columns([3, 2], gap="medium")
+main_left, main_right = st.columns([3, 2], gap="small")
 
 with main_left:
     # ── Portfolio Equity ──────────────────────────────────────────────────────
@@ -872,8 +942,7 @@ with main_right:
 
 # ── BOTTOM SECTION: Backtest + Manual Trade | Configuration ────────────────────
 
-st.divider()
-bt_col, cfg_col = st.columns([2, 3], gap="medium")
+bt_col, cfg_col = st.columns([2, 3], gap="small")
 
 # ── Backtest Engine ───────────────────────────────────────────────────────────
 with bt_col:
@@ -932,7 +1001,6 @@ with bt_col:
             with mt3:
                 mt_side = st.radio("Side", ["Buy", "Sell"], horizontal=True, key="mt_side")
             with mt4:
-                st.markdown('<div style="height:22px;"></div>', unsafe_allow_html=True)
                 if mt_price is not None:
                     btn_label = f"Order (${mt_price * mt_qty:,.2f})"
                 else:
