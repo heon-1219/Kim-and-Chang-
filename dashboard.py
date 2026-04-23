@@ -251,15 +251,38 @@ def _bar_html(label: str, pct: float, note: str = "") -> str:
 
 @st.cache_data(ttl=60)
 def _portfolio_history(period: str = "1D", timeframe: str = "1D") -> pd.DataFrame | None:
-    try:
-        ph = broker.get_portfolio_history(period=period, timeframe=timeframe)
-        if not ph.timestamp:
-            return None
-        df = pd.DataFrame({"date": pd.to_datetime(ph.timestamp, unit="s"),
-                           "equity": ph.equity}).dropna()
-        return df if not df.empty else None
-    except Exception:
-        return None
+    """
+    Fetch portfolio equity history. Alpaca rejects some period/timeframe pairs
+    silently (empty timestamps) — e.g. intraday bars with long periods on
+    accounts without enough history. When the primary combo returns empty,
+    progressively fall back to safer combos so the chart always shows data.
+    """
+    # Each entry is (period, timeframe). First = requested; rest = fallbacks.
+    attempts: list[tuple[str, str]] = [(period, timeframe)]
+    # Intraday bars: fall back to a shorter period, then to daily.
+    if timeframe in ("1Min", "5Min", "15Min"):
+        attempts += [("1D", timeframe), ("1M", "1D"), ("1A", "1D")]
+    elif timeframe == "1H":
+        attempts += [("1W", "1H"), ("1M", "1D"), ("1A", "1D")]
+    else:  # "1D" or anything else
+        attempts += [("1A", "1D"), ("1M", "1D"), ("1W", "1D")]
+
+    tried: set[tuple[str, str]] = set()
+    for p, tf in attempts:
+        if (p, tf) in tried:
+            continue
+        tried.add((p, tf))
+        try:
+            ph = broker.get_portfolio_history(period=p, timeframe=tf)
+            if not ph.timestamp:
+                continue
+            df = pd.DataFrame({"date": pd.to_datetime(ph.timestamp, unit="s"),
+                               "equity": ph.equity}).dropna()
+            if not df.empty:
+                return df
+        except Exception:
+            continue
+    return None
 
 @st.cache_data(ttl=30)
 def _stock_info(symbol: str, period: str = "1d", interval: str = "15m",
@@ -389,11 +412,12 @@ def _trades_fig(trades: list, strategy_filter: list[str] | None,
         fig.add_annotation(text="No trades recorded yet", x=0.5, y=0.5,
                            xref="paper", yref="paper", showarrow=False,
                            font=dict(color="#4a6a90", size=12))
-    fig.update_layout(**chart_cfg, height=height, barmode="group",
-                      bargap=0.15, bargroupgap=0.05,
-                      legend=dict(orientation="h", yanchor="bottom", y=1.0,
-                                  xanchor="right", x=1.0,
-                                  bgcolor="rgba(0,0,0,0)", font=dict(size=10)))
+    trades_cfg = {**chart_cfg,
+                  "legend": dict(orientation="h", yanchor="bottom", y=1.0,
+                                 xanchor="right", x=1.0,
+                                 bgcolor="rgba(0,0,0,0)", font=dict(size=10))}
+    fig.update_layout(**trades_cfg, height=height, barmode="group",
+                      bargap=0.15, bargroupgap=0.05)
     fig.update_yaxes(title_text="Quantity", rangemode="tozero")
     return fig
 
@@ -791,36 +815,42 @@ with main_left:
 - Select one or more strategies below to overlay trade markers on the chart.
 - This chart shows *total* portfolio equity sourced from Alpaca.
         """)
-        # bar_size → (alpaca_period, alpaca_timeframe). Each bar on the chart represents
-        # `bar_size`; the period is chosen to show a useful span of that granularity.
+        # bar_size → (alpaca_period, alpaca_timeframe, resample_rule).
+        # Each bar on the chart represents `bar_size`. `resample_rule` (pandas)
+        # is applied when Alpaca doesn't natively offer that bar size.
         PERIOD_OPTS: dict[str, tuple] = {
-            "1 Min":   ("1D",  "1Min"),     # today at 1-min bars
-            "5 Min":   ("1D",  "5Min"),     # today at 5-min bars
-            "15 Min":  ("5D",  "15Min"),    # last 5 days at 15-min bars
-            "1 Hour":  ("1M",  "1H"),       # last month at hourly bars
-            "1 Day":   ("1A",  "1D"),       # last year at daily bars
-            "1 Week":  ("5A",  "1D"),       # last 5 years, daily bars resampled to weekly
+            "1 Min":    ("1D", "1Min",  None),      # today, 1-min bars
+            "5 Min":    ("1D", "5Min",  None),      # today, 5-min bars
+            "15 Min":   ("5D", "15Min", None),      # 5 days, 15-min bars
+            "30 Min":   ("1W", "15Min", "30min"),   # 1 week, 15-min resampled to 30-min
+            "1 Hour":   ("1W", "1H",    None),      # 1 week, hourly bars
+            "4 Hour":   ("1M", "1H",    "4h"),      # 1 month, hourly resampled to 4h
+            "1 Day":    ("1M", "1D",    None),      # 1 month, daily bars
+            "1 Week":   ("1A", "1D",    "W-FRI"),   # 1 year, daily resampled to weekly
+            "1 Month":  ("5A", "1D",    "ME"),      # 5 years, daily resampled to monthly
+            "1 Quarter":("5A", "1D",    "QE"),      # 5 years, daily resampled to quarterly
+            "1 Year":   ("5A", "1D",    "YE"),      # 5 years, daily resampled to yearly
         }
         per_col, strat_col = st.columns([1, 2])
         with per_col:
-            period_key = st.selectbox("Period", list(PERIOD_OPTS), index=4,
+            period_key = st.selectbox("Period", list(PERIOD_OPTS), index=6,
                                       label_visibility="collapsed")
         with strat_col:
             overlay_strats = st.multiselect(
                 "Show strategy trades", list(STRATEGIES.keys()),
                 default=[], placeholder="Overlay strategy trades…",
                 label_visibility="collapsed")
-        api_period, api_tf = PERIOD_OPTS[period_key]
+        api_period, api_tf, resample_rule = PERIOD_OPTS[period_key]
         if DEMO:
             ph = _demo_ph()
         else:
             ph = _portfolio_history(api_period, api_tf)
-        # Resample to weekly when the user picked 1 Week (Alpaca doesn't expose 1W)
-        if ph is not None and period_key == "1 Week":
-            wk = (ph.set_index("date")["equity"]
-                    .resample("W-FRI").last().dropna().reset_index())
-            if not wk.empty:
-                ph = wk
+        # Resample when the requested bar size isn't a native Alpaca timeframe.
+        if ph is not None and resample_rule:
+            rs = (ph.set_index("date")["equity"]
+                    .resample(resample_rule).last().dropna().reset_index())
+            if not rs.empty:
+                ph = rs
         if ph is not None:
             st.plotly_chart(_equity_fig(ph, trades, overlay_strats,
                                         height=560 if eq_expanded else 320),
