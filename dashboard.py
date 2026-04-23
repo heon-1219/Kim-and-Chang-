@@ -289,8 +289,8 @@ _MARKET_INDICES = [
     ("^GSPC", "S&P 500"),
     ("^IXIC", "Nasdaq"),
     ("^DJI",  "Dow"),
-    ("^RUT",  "Russell"),
-    ("^VIX",  "VIX"),
+    ("CL=F",  "WTI Oil"),
+    ("KRW=X", "USD/KRW"),
 ]
 
 _MAG7 = [
@@ -336,30 +336,38 @@ def _ticker_snapshots(symbols: tuple[str, ...]) -> dict[str, tuple[float, float]
     return out
 
 
+def _fmt_price(p: float) -> str:
+    """Compact price: drop decimals once we're over $1k so the card stays narrow."""
+    if p >= 1000:
+        return f"${p:,.0f}"
+    return f"${p:,.2f}"
+
+
 def _ticker_card_html(label: str, price: float | None, pct: float | None) -> str:
-    """Compact card for the market ticker strip."""
+    """Ultra-compact two-line card for the market ticker strip."""
+    base = (
+        "background:#0d1526;border:1px solid #1e3a5f;border-radius:4px;"
+        "padding:2px 4px;text-align:center;line-height:1.15;"
+        "overflow:hidden;white-space:nowrap;"
+    )
+    lbl = (
+        f'<div style="font-size:0.52rem;letter-spacing:0.05em;'
+        f'color:#6b8bb0;text-transform:uppercase;">{label}</div>'
+    )
     if price is None or pct is None:
         return (
-            '<div style="background:#0d1526;border:1px solid #1e3a5f;'
-            'border-radius:5px;padding:5px 8px;text-align:center;">'
-            f'<div style="font-size:0.58rem;letter-spacing:0.08em;'
-            f'color:#6b8bb0;text-transform:uppercase;">{label}</div>'
-            '<div style="font-size:0.82rem;color:#4a6a90;font-weight:600;'
-            'margin-top:1px;">—</div>'
-            '<div style="font-size:0.6rem;color:#4a6a90;">n/a</div>'
+            f'<div style="{base}">{lbl}'
+            '<div style="font-size:0.68rem;color:#4a6a90;">— n/a</div>'
             '</div>'
         )
-    color  = "#00c896" if pct >= 0 else "#ff4b4b"
-    arrow  = "▲" if pct >= 0 else "▼"
+    color = "#00c896" if pct >= 0 else "#ff4b4b"
+    arrow = "▲" if pct >= 0 else "▼"
     return (
-        '<div style="background:#0d1526;border:1px solid #1e3a5f;'
-        'border-radius:5px;padding:5px 8px;text-align:center;">'
-        f'<div style="font-size:0.58rem;letter-spacing:0.08em;'
-        f'color:#6b8bb0;text-transform:uppercase;">{label}</div>'
-        f'<div style="font-size:0.82rem;color:#e2e8f0;font-weight:600;'
-        f'margin-top:1px;">${price:,.2f}</div>'
-        f'<div style="font-size:0.6rem;color:{color};font-weight:600;">'
-        f'{arrow} {pct:+.2f}%</div>'
+        f'<div style="{base}">{lbl}'
+        f'<div style="font-size:0.7rem;color:#e2e8f0;font-weight:600;">'
+        f'{_fmt_price(price)}'
+        f'<span style="font-size:0.56rem;color:{color};font-weight:600;'
+        f'margin-left:4px;">{arrow}{pct:+.2f}%</span></div>'
         '</div>'
     )
 
@@ -1009,22 +1017,24 @@ with main_left:
     # ── Market Ticker (indices + Magnificent 7) ───────────────────────────────
     st.markdown('<div id="market"></div>', unsafe_allow_html=True)
     with st.container(border=True):
-        _panel_header("Market Snapshot", help_md="""
-Real-time daily close + daily %-change via Yahoo Finance.
-Top row: major US indices. Bottom row: Magnificent 7 mega-cap tech.
-Data refreshes once per minute (cache TTL 60s).
-        """)
+        st.markdown(
+            '<p style="font-size:0.6rem;font-weight:600;letter-spacing:0.1em;'
+            'color:#00d4aa;text-transform:uppercase;margin:0 0 3px;">'
+            'Market Snapshot '
+            '<span style="color:#4a6a90;font-weight:400;letter-spacing:0;">'
+            '· indices + Mag 7 · daily %</span></p>',
+            unsafe_allow_html=True)
         all_syms = tuple(s for s, _ in _MARKET_INDICES) + tuple(s for s, _ in _MAG7)
         snaps = _ticker_snapshots(all_syms)
 
-        idx_cols = st.columns(len(_MARKET_INDICES))
+        idx_cols = st.columns(len(_MARKET_INDICES), gap="small")
         for col, (sym, label) in zip(idx_cols, _MARKET_INDICES):
             price, pct = snaps.get(sym, (None, None))
             with col:
                 st.markdown(_ticker_card_html(label, price, pct),
                             unsafe_allow_html=True)
 
-        mag_cols = st.columns(len(_MAG7))
+        mag_cols = st.columns(len(_MAG7), gap="small")
         for col, (sym, label) in zip(mag_cols, _MAG7):
             price, pct = snaps.get(sym, (None, None))
             with col:
