@@ -127,6 +127,8 @@ _STRAT_CLR = {
     "macd":         "#f7b731",
     "bollinger":    "#a29bfe",
     "ema_crossover":"#fd9644",
+    "momentum":     "#00c896",
+    "short_ma":     "#ee5a6f",
 }
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -394,6 +396,160 @@ def _demo_ph() -> pd.DataFrame:
     vals = 100_000 * (1 + pd.Series(np.random.randn(30).cumsum() * 0.007)).values
     return pd.DataFrame({"date": rng, "equity": vals})
 
+
+_BT_HELP = """
+**How to use:**
+1. Enter one or more symbols (e.g. `AAPL` or `AAPL, MSFT, GOOGL`), choose a strategy,
+   set a date range and starting capital. For multi-symbol runs the capital is split
+   evenly and the strategy runs independently per symbol.
+2. Click **Run Backtest**. Results appear below. Data sourced from Yahoo Finance (free).
+3. A dashed grey **Buy & Hold** line shows what holding the same basket passively would have returned.
+4. Click **Add to comparison** to store a result, then run another backtest to compare curves.
+5. Click **Clear** to reset stored comparisons.
+6. Click the **⤢** top-right to enter fullscreen for a much larger chart; **⤡** to collapse.
+"""
+
+
+def _render_backtest_panel(chart_height: int) -> None:
+    """Render the full Backtest panel contents. The surrounding bordered
+    container and the _panel_header should already be set by the caller."""
+    if DEMO:
+        st.info("Demo mode — backtesting requires live API access.")
+        return
+    if GUEST:
+        st.info("👁 View-only mode — sign in to run backtests.")
+        return
+
+    b1, b2 = st.columns(2)
+    with b1:
+        sym_bt_raw = st.text_input("Symbols (comma-separated)", "AAPL",
+                                   placeholder="AAPL, MSFT, GOOGL")
+        sym_bt_list = [s.strip().upper() for s in sym_bt_raw.split(",") if s.strip()]
+    with b2:
+        strat_bt = st.selectbox("Strategy", list(STRATEGIES.keys()))
+    b3, b4 = st.columns(2)
+    with b3: s_bt = st.date_input("Start", date(2024,1,1))
+    with b4: e_bt = st.date_input("End",   date.today())
+    cap_bt = st.number_input("Starting capital ($)", value=100_000, step=10_000)
+
+    # Per-strategy parameter overrides for this backtest run
+    with st.expander("⚙ Strategy Parameters", expanded=False):
+        if strat_bt == "rsi":
+            pc1,pc2,pc3 = st.columns(3)
+            with pc1: bt_rsi_p  = st.number_input("RSI Period",  2,   50, int(cfg.get("rsi_period",    "14")),          key="bt_rsi_p")
+            with pc2: bt_rsi_ov = st.number_input("Oversold",   10.,  50., float(cfg.get("rsi_oversold", "30")), step=1., key="bt_rsi_ov")
+            with pc3: bt_rsi_ob = st.number_input("Overbought", 50.,  90., float(cfg.get("rsi_overbought","70")), step=1., key="bt_rsi_ob")
+            bt_strat_cfg = {"rsi_period": bt_rsi_p, "rsi_oversold": bt_rsi_ov, "rsi_overbought": bt_rsi_ob}
+        elif strat_bt == "macd":
+            pc1,pc2,pc3 = st.columns(3)
+            with pc1: bt_mf  = st.number_input("Fast",   2,  50, int(cfg.get("macd_fast",   "12")), key="bt_mf")
+            with pc2: bt_ms  = st.number_input("Slow",   5, 100, int(cfg.get("macd_slow",   "26")), key="bt_ms")
+            with pc3: bt_msg = st.number_input("Signal", 2,  50, int(cfg.get("macd_signal", "9")),  key="bt_msg")
+            bt_strat_cfg = {"macd_fast": bt_mf, "macd_slow": bt_ms, "macd_signal": bt_msg}
+        elif strat_bt == "bollinger":
+            pc1,pc2 = st.columns(2)
+            with pc1: bt_bw = st.number_input("Window",  5,  100, int(cfg.get("bb_window","20")),           key="bt_bw")
+            with pc2: bt_bs = st.number_input("Std Dev", .5, 5.0, float(cfg.get("bb_std",  "2.0")), step=.5, key="bt_bs")
+            bt_strat_cfg = {"bb_window": bt_bw, "bb_std": bt_bs}
+        elif strat_bt == "ema_crossover":
+            pc1,pc2 = st.columns(2)
+            with pc1: bt_ef = st.number_input("Fast EMA", 2,  50, int(cfg.get("ema_fast","9")),  key="bt_ef")
+            with pc2: bt_es = st.number_input("Slow EMA", 5, 200, int(cfg.get("ema_slow","21")), key="bt_es")
+            bt_strat_cfg = {"ema_fast": bt_ef, "ema_slow": bt_es}
+        elif strat_bt == "momentum":
+            pc1,pc2 = st.columns(2)
+            with pc1: bt_mw  = st.number_input("Window",   1, 20, int(cfg.get("momentum_window","3")),       key="bt_mw")
+            with pc2: bt_mth = st.number_input("Threshold %", 0.05, 5.0, float(cfg.get("momentum_threshold","0.3")), step=0.05, key="bt_mth")
+            bt_strat_cfg = {"momentum_window": bt_mw, "momentum_threshold": bt_mth}
+        elif strat_bt == "short_ma":
+            pc1,pc2 = st.columns(2)
+            with pc1: bt_sf = st.number_input("Fast window",  2,  30, int(cfg.get("short_ma_fast","5")),  key="bt_sf")
+            with pc2: bt_ss = st.number_input("Slow window",  5,  60, int(cfg.get("short_ma_slow","15")), key="bt_ss")
+            bt_strat_cfg = {"short_ma_fast": bt_sf, "short_ma_slow": bt_ss}
+        else:
+            bt_strat_cfg = {}
+    bt_settings = {**cfg, **bt_strat_cfg}
+
+    run_c, add_c, clr_c = st.columns([2, 1, 1])
+    with run_c:
+        run_bt = st.button("▶  Run Backtest", type="primary", use_container_width=True)
+    with add_c:
+        add_bt = st.button("＋ Compare", use_container_width=True,
+                           disabled="bt" not in st.session_state)
+    with clr_c:
+        if st.button("✕ Clear", use_container_width=True):
+            st.session_state.pop("bt", None)
+            st.session_state.pop("bt_compare", None)
+            st.rerun()
+
+    if run_bt:
+        if s_bt >= e_bt:
+            st.error("Start must be before end.")
+        elif not sym_bt_list:
+            st.error("Enter at least one symbol.")
+        else:
+            with st.spinner(f"Running {strat_bt.upper()} on {', '.join(sym_bt_list)}…"):
+                try:
+                    st.session_state["bt"] = run_backtest(
+                        sym_bt_list, strat_bt, s_bt, e_bt, float(cap_bt), bt_settings)
+                    label_syms = (sym_bt_list[0] if len(sym_bt_list) == 1
+                                  else f"{len(sym_bt_list)} syms")
+                    st.session_state["bt_lbl"] = (
+                        f"{label_syms}·{strat_bt.upper()}·{s_bt}→{e_bt}")
+                    if st.session_state["bt"].get("errors"):
+                        for err in st.session_state["bt"]["errors"]:
+                            st.warning(err)
+                except Exception as ex:
+                    st.error(str(ex))
+
+    if add_bt and "bt" in st.session_state:
+        comp = st.session_state.setdefault("bt_compare", {})
+        lbl  = st.session_state.get("bt_lbl","run")
+        comp[lbl] = st.session_state["bt"]
+
+    if "bt" in st.session_state:
+        m = st.session_state["bt"]["metrics"]
+        st.caption(st.session_state.get("bt_lbl",""))
+        r1, r2, r3, r4, r5 = st.columns(5)
+        r1.metric("Return",   f"{m['total_return_pct']:+.2f}%")
+        r2.metric("Sharpe",   f"{m['sharpe_ratio']:.2f}")
+        r3.metric("Max DD",   f"{m['max_drawdown_pct']:.2f}%")
+        r4.metric("Win %",    f"{m['win_rate_pct']:.0f}%")
+        r5.metric("Trades",   m["total_trades"])
+
+        # Build comparison chart (latest + any stored comparisons)
+        compare = st.session_state.get("bt_compare", {})
+        all_results = {**compare, st.session_state.get("bt_lbl","Latest"): st.session_state["bt"]}
+        fig_bt = go.Figure()
+        colors_bt = ["#00c896","#4ecdc4","#f7b731","#a29bfe","#fd9644"]
+        for i, (lbl, res) in enumerate(all_results.items()):
+            eq_c = res.get("equity_curve", pd.DataFrame())
+            if not eq_c.empty:
+                line_c = colors_bt[i % len(colors_bt)]
+                fig_bt.add_trace(go.Scatter(
+                    x=eq_c["date"], y=eq_c["equity"],
+                    mode="lines", name=lbl,
+                    line=dict(color=line_c, width=1.5),
+                    hovertemplate="$%{y:,.0f}<extra>" + lbl + "</extra>"))
+
+        # Buy-and-hold baseline for the latest run (summed across symbols)
+        hold_c = st.session_state["bt"].get("buy_and_hold_curve", pd.DataFrame())
+        if hold_c is not None and not hold_c.empty:
+            fig_bt.add_trace(go.Scatter(
+                x=hold_c["date"], y=hold_c["equity"],
+                mode="lines", name="Buy & Hold",
+                line=dict(color="#8899aa", width=1.3, dash="dash"),
+                hovertemplate="$%{y:,.0f}<extra>Buy & Hold</extra>"))
+
+        if fig_bt.data:
+            fig_bt.add_hline(
+                y=st.session_state["bt"]["metrics"]["starting_capital"],
+                line=dict(color="#444", width=1, dash="dot"))
+            fig_bt.update_layout(**_CHART, height=chart_height)
+            fig_bt.update_yaxes(tickprefix="$", tickformat=",.0f")
+            st.plotly_chart(fig_bt, use_container_width=True, config=_NO_TB)
+
+
 # ── Load runtime data ─────────────────────────────────────────────────────────
 
 hb      = None if DEMO else db.get_heartbeat()
@@ -401,7 +557,7 @@ cfg     = {"trading_enabled":"true","active_strategy":"rsi"} if DEMO else db.get
 now_utc = datetime.utcnow()
 uname   = st.session_state.get("username", "—")
 trades  = _demo_trades() if DEMO else db.get_recent_trades(limit=50)
-logs    = _demo_logs()   if DEMO else db.get_recent_logs(limit=50)
+logs    = _demo_logs()   if DEMO else db.get_recent_logs(limit=500)
 
 try:
     ac   = _demo_account() if DEMO else broker.get_account()
@@ -432,6 +588,9 @@ except (json.JSONDecodeError, TypeError):
     alloc_cfg = {}
 
 n_active_strats = sum(1 for v in alloc_cfg.values() if v.get("enabled"))
+
+# Backtest fullscreen collapses every other panel so the chart can take the page
+BT_FULL = bool(st.session_state.get("_fsstate_backtest", False))
 
 # ── HEADER ───────────────────────────────────────────────────────────────────
 
@@ -478,10 +637,34 @@ with right_hdr:
         if st.button("⏻", help="Sign out", use_container_width=True):
             st.session_state.clear(); st.rerun()
 
+# ── Backtest fullscreen mode: render only the backtest and halt the script ──
+
+if BT_FULL:
+    st.divider()
+    st.markdown('<div id="backtest"></div>', unsafe_allow_html=True)
+    with st.container(border=True):
+        bt_expanded = _panel_header("Backtest Engine", panel_key="backtest", help_md=_BT_HELP)
+        _render_backtest_panel(chart_height=640)
+    # Keep the demo/guest badges visible in fullscreen too
+    if DEMO:
+        st.markdown(
+            '<div style="position:fixed;bottom:12px;right:16px;font-size:0.7rem;'
+            'color:#ffa500;background:#0a0e1a;padding:4px 10px;'
+            'border:1px solid #2a3a50;border-radius:4px;">DEMO MODE</div>',
+            unsafe_allow_html=True)
+    if GUEST:
+        st.markdown(
+            '<div style="position:fixed;bottom:12px;right:16px;font-size:0.7rem;'
+            'color:#ffa500;background:#0a0e1a;padding:4px 10px;'
+            'border:1px solid #ffa50055;border-radius:4px;">👁 GUEST MODE</div>',
+            unsafe_allow_html=True)
+    st.stop()
+
 # ── ACCOUNT METRICS ───────────────────────────────────────────────────────────
 
-st.divider()
-st.markdown("""<div class="kc-nav">
+if not BT_FULL:
+    st.divider()
+    st.markdown("""<div class="kc-nav">
   <a href="#equity">📈 Equity</a>
   <a href="#trades">📊 Trades</a>
   <a href="#positions">💼 Positions</a>
@@ -491,12 +674,12 @@ st.markdown("""<div class="kc-nav">
   <a href="#manual">✋ Manual</a>
   <a href="#config">⚙️ Config</a>
 </div>""", unsafe_allow_html=True)
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("Portfolio Balance",  f"${eq:,.2f}")
-m2.metric("Cash Available",     f"${cash:,.2f}")
-m3.metric("Buying Power",       f"${bp:,.2f}")
-m4.metric("Today P&L",         f"${pnl:+,.2f}", delta=f"{pp:+.2f}%")
-st.divider()
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Portfolio Balance",  f"${eq:,.2f}")
+    m2.metric("Cash Available",     f"${cash:,.2f}")
+    m3.metric("Buying Power",       f"${bp:,.2f}")
+    m4.metric("Today P&L",         f"${pnl:+,.2f}", delta=f"{pp:+.2f}%")
+    st.divider()
 
 # ── MAIN SECTION: charts (left) | data panels (right) ─────────────────────────
 
@@ -508,37 +691,43 @@ with main_left:
     with st.container(border=True):
         eq_expanded = _panel_header("Portfolio Equity", panel_key="equity", help_md="""
 **How to use:**
-- Select a time window from the dropdown (1 Min → 1 Year).
-  Short views (≤1 Day) show today's equity at 1-min resolution.
+- Each dropdown option sets the **bar size** — "1 Min" means each point on the chart
+  represents one minute, "1 Day" means each point is one trading day, and so on.
+  The chart always shows a sensible span for that bar size (e.g. 1-min bars = today,
+  1-day bars = last year).
 - Select one or more strategies below to overlay trade markers on the chart.
 - This chart shows *total* portfolio equity sourced from Alpaca.
         """)
-        # (api_period, api_timeframe, tail_bars_or_None)
+        # bar_size → (alpaca_period, alpaca_timeframe). Each bar on the chart represents
+        # `bar_size`; the period is chosen to show a useful span of that granularity.
         PERIOD_OPTS: dict[str, tuple] = {
-            "1 Min":   ("1D", "1Min",  5),
-            "10 Min":  ("1D", "1Min",  10),
-            "1 Hour":  ("1D", "1Min",  60),
-            "1 Day":   ("1D", "1Min",  None),
-            "1 Week":  ("1W", "1H",    None),
-            "1 Month": ("1M", "1D",    None),
-            "1 Year":  ("1A", "1D",    None),
+            "1 Min":   ("1D",  "1Min"),     # today at 1-min bars
+            "5 Min":   ("1D",  "5Min"),     # today at 5-min bars
+            "15 Min":  ("5D",  "15Min"),    # last 5 days at 15-min bars
+            "1 Hour":  ("1M",  "1H"),       # last month at hourly bars
+            "1 Day":   ("1A",  "1D"),       # last year at daily bars
+            "1 Week":  ("5A",  "1D"),       # last 5 years, daily bars resampled to weekly
         }
         per_col, strat_col = st.columns([1, 2])
         with per_col:
-            period_key = st.selectbox("Period", list(PERIOD_OPTS), index=3,
+            period_key = st.selectbox("Period", list(PERIOD_OPTS), index=4,
                                       label_visibility="collapsed")
         with strat_col:
             overlay_strats = st.multiselect(
                 "Show strategy trades", list(STRATEGIES.keys()),
                 default=[], placeholder="Overlay strategy trades…",
                 label_visibility="collapsed")
-        api_period, api_tf, tail_n = PERIOD_OPTS[period_key]
+        api_period, api_tf = PERIOD_OPTS[period_key]
         if DEMO:
             ph = _demo_ph()
         else:
             ph = _portfolio_history(api_period, api_tf)
-        if ph is not None and tail_n is not None:
-            ph = ph.tail(tail_n).reset_index(drop=True)
+        # Resample to weekly when the user picked 1 Week (Alpaca doesn't expose 1W)
+        if ph is not None and period_key == "1 Week":
+            wk = (ph.set_index("date")["equity"]
+                    .resample("W-FRI").last().dropna().reset_index())
+            if not wk.empty:
+                ph = wk
         if ph is not None:
             st.plotly_chart(_equity_fig(ph, trades, overlay_strats,
                                         height=420 if eq_expanded else 140),
@@ -587,8 +776,8 @@ with main_right:
                     else db.get_all_traded_symbols())
         tab_h = 110
 
-        STRAT_TABS = ["RSI","MACD","Bollinger","EMA Cross","Manual","All"]
-        STRAT_KEYS = ["rsi","macd","bollinger","ema_crossover","manual", None]
+        STRAT_TABS = ["RSI","MACD","Bollinger","EMA","Momentum","Short MA","Manual","All"]
+        STRAT_KEYS = ["rsi","macd","bollinger","ema_crossover","momentum","short_ma","manual", None]
         tabs = st.tabs(STRAT_TABS)
 
         for tab, strat_key in zip(tabs, STRAT_KEYS):
@@ -662,10 +851,10 @@ with main_right:
     # ── Bot Logs ──────────────────────────────────────────────────────────────
     st.markdown('<div id="logs"></div>', unsafe_allow_html=True)
     with st.container(border=True):
-        _panel_header("Bot Logs", panel_key="logs",
+        _panel_header("Logs", panel_key="logs",
                       page_link="pages/log.py", help_md="""
 **How to read:**
-- **INFO** (grey) — routine status messages.
+- **INFO** (grey) — routine status messages, including manual orders and kill-switch toggles.
 - **WARN** (amber) — non-critical warnings (e.g. rate limit approaching).
 - **ERROR** (red) — failures that need attention.
 - Click ⤢ to open the full log page (search, filters, trade summary, signal events).
@@ -676,7 +865,8 @@ with main_right:
                     "WARN": "color:#ffa500",
                     "INFO": "color:#6b8bb0"}
             st.dataframe(df_l.style.map(lambda v: LS.get(v,""), subset=["level"]),
-                         use_container_width=True, hide_index=True, height=85)
+                         use_container_width=True, hide_index=True, height=320)
+            st.caption(f"{len(df_l):,} most recent entries")
         else:
             st.caption("No log entries yet.")
 
@@ -689,144 +879,12 @@ bt_col, cfg_col = st.columns([2, 3], gap="medium")
 with bt_col:
     st.markdown('<div id="backtest"></div>', unsafe_allow_html=True)
     with st.container(border=True):
-        bt_expanded = _panel_header("Backtest Engine", panel_key="backtest", help_md="""
-**How to use:**
-1. Enter one or more symbols (e.g. `AAPL` or `AAPL, MSFT, GOOGL`), choose a strategy,
-   set a date range and starting capital. For multi-symbol runs the capital is split
-   evenly and the strategy runs independently per symbol.
-2. Click **Run Backtest**. Results appear below. Data sourced from Yahoo Finance (free).
-3. A dashed grey **Buy & Hold** line shows what holding the same basket passively would have returned.
-4. Click **Add to comparison** to store a result, then run another backtest to compare curves.
-5. Click **Clear** to reset stored comparisons.
-        """)
-        if DEMO:
-            st.info("Demo mode — backtesting requires live API access.")
-        elif GUEST:
-            st.info("👁 View-only mode — sign in to run backtests.")
-        else:
-            b1, b2 = st.columns(2)
-            with b1:
-                sym_bt_raw = st.text_input("Symbols (comma-separated)", "AAPL",
-                                           placeholder="AAPL, MSFT, GOOGL")
-                sym_bt_list = [s.strip().upper() for s in sym_bt_raw.split(",") if s.strip()]
-                sym_bt = sym_bt_list[0] if len(sym_bt_list) == 1 else ",".join(sym_bt_list)
-            with b2: strat_bt = st.selectbox("Strategy", list(STRATEGIES.keys()))
-            b3, b4 = st.columns(2)
-            with b3: s_bt = st.date_input("Start", date(2024,1,1))
-            with b4: e_bt = st.date_input("End",   date.today())
-            cap_bt = st.number_input("Starting capital ($)", value=100_000, step=10_000)
-
-            # Per-strategy parameter overrides for this backtest run
-            with st.expander("⚙ Strategy Parameters", expanded=False):
-                if strat_bt == "rsi":
-                    pc1,pc2,pc3 = st.columns(3)
-                    with pc1: bt_rsi_p  = st.number_input("RSI Period",  2,   50, int(cfg.get("rsi_period",    "14")),          key="bt_rsi_p")
-                    with pc2: bt_rsi_ov = st.number_input("Oversold",   10.,  50., float(cfg.get("rsi_oversold", "30")), step=1., key="bt_rsi_ov")
-                    with pc3: bt_rsi_ob = st.number_input("Overbought", 50.,  90., float(cfg.get("rsi_overbought","70")), step=1., key="bt_rsi_ob")
-                    bt_strat_cfg = {"rsi_period": bt_rsi_p, "rsi_oversold": bt_rsi_ov, "rsi_overbought": bt_rsi_ob}
-                elif strat_bt == "macd":
-                    pc1,pc2,pc3 = st.columns(3)
-                    with pc1: bt_mf  = st.number_input("Fast",   2,  50, int(cfg.get("macd_fast",   "12")), key="bt_mf")
-                    with pc2: bt_ms  = st.number_input("Slow",   5, 100, int(cfg.get("macd_slow",   "26")), key="bt_ms")
-                    with pc3: bt_msg = st.number_input("Signal", 2,  50, int(cfg.get("macd_signal", "9")),  key="bt_msg")
-                    bt_strat_cfg = {"macd_fast": bt_mf, "macd_slow": bt_ms, "macd_signal": bt_msg}
-                elif strat_bt == "bollinger":
-                    pc1,pc2 = st.columns(2)
-                    with pc1: bt_bw = st.number_input("Window",  5,  100, int(cfg.get("bb_window","20")),           key="bt_bw")
-                    with pc2: bt_bs = st.number_input("Std Dev", .5, 5.0, float(cfg.get("bb_std",  "2.0")), step=.5, key="bt_bs")
-                    bt_strat_cfg = {"bb_window": bt_bw, "bb_std": bt_bs}
-                elif strat_bt == "ema_crossover":
-                    pc1,pc2 = st.columns(2)
-                    with pc1: bt_ef = st.number_input("Fast EMA", 2,  50, int(cfg.get("ema_fast","9")),  key="bt_ef")
-                    with pc2: bt_es = st.number_input("Slow EMA", 5, 200, int(cfg.get("ema_slow","21")), key="bt_es")
-                    bt_strat_cfg = {"ema_fast": bt_ef, "ema_slow": bt_es}
-                else:
-                    bt_strat_cfg = {}
-            bt_settings = {**cfg, **bt_strat_cfg}
-
-            run_c, add_c, clr_c = st.columns([2, 1, 1])
-            with run_c:
-                run_bt = st.button("▶  Run Backtest", type="primary", use_container_width=True)
-            with add_c:
-                add_bt = st.button("＋ Compare", use_container_width=True,
-                                   disabled="bt" not in st.session_state)
-            with clr_c:
-                if st.button("✕ Clear", use_container_width=True):
-                    st.session_state.pop("bt", None)
-                    st.session_state.pop("bt_compare", None)
-                    st.rerun()
-
-            if run_bt:
-                if s_bt >= e_bt:
-                    st.error("Start must be before end.")
-                elif not sym_bt_list:
-                    st.error("Enter at least one symbol.")
-                else:
-                    with st.spinner(f"Running {strat_bt.upper()} on {', '.join(sym_bt_list)}…"):
-                        try:
-                            st.session_state["bt"] = run_backtest(
-                                sym_bt_list, strat_bt, s_bt, e_bt, float(cap_bt), bt_settings)
-                            label_syms = (sym_bt_list[0] if len(sym_bt_list) == 1
-                                          else f"{len(sym_bt_list)} syms")
-                            st.session_state["bt_lbl"] = (
-                                f"{label_syms}·{strat_bt.upper()}·{s_bt}→{e_bt}")
-                            if st.session_state["bt"].get("errors"):
-                                for err in st.session_state["bt"]["errors"]:
-                                    st.warning(err)
-                        except Exception as ex:
-                            st.error(str(ex))
-
-            if add_bt and "bt" in st.session_state:
-                comp = st.session_state.setdefault("bt_compare", {})
-                lbl  = st.session_state.get("bt_lbl","run")
-                comp[lbl] = st.session_state["bt"]
-
-            if "bt" in st.session_state:
-                m = st.session_state["bt"]["metrics"]
-                st.caption(st.session_state.get("bt_lbl",""))
-                r1, r2, r3, r4, r5 = st.columns(5)
-                r1.metric("Return",   f"{m['total_return_pct']:+.2f}%")
-                r2.metric("Sharpe",   f"{m['sharpe_ratio']:.2f}")
-                r3.metric("Max DD",   f"{m['max_drawdown_pct']:.2f}%")
-                r4.metric("Win %",    f"{m['win_rate_pct']:.0f}%")
-                r5.metric("Trades",   m["total_trades"])
-
-                # Build comparison chart (latest + any stored comparisons)
-                compare = st.session_state.get("bt_compare", {})
-                all_results = {**compare, st.session_state.get("bt_lbl","Latest"): st.session_state["bt"]}
-                fig_bt = go.Figure()
-                colors_bt = ["#00c896","#4ecdc4","#f7b731","#a29bfe","#fd9644"]
-                for i, (lbl, res) in enumerate(all_results.items()):
-                    eq_c = res.get("equity_curve", pd.DataFrame())
-                    if not eq_c.empty:
-                        up_c = res["metrics"]["total_return_pct"] >= 0
-                        line_c = colors_bt[i % len(colors_bt)]
-                        fig_bt.add_trace(go.Scatter(
-                            x=eq_c["date"], y=eq_c["equity"],
-                            mode="lines", name=lbl,
-                            line=dict(color=line_c, width=1.5),
-                            hovertemplate="$%{y:,.0f}<extra>" + lbl + "</extra>"))
-
-                # Buy-and-hold baseline for the latest run (summed across symbols)
-                hold_c = st.session_state["bt"].get("buy_and_hold_curve", pd.DataFrame())
-                if hold_c is not None and not hold_c.empty:
-                    fig_bt.add_trace(go.Scatter(
-                        x=hold_c["date"], y=hold_c["equity"],
-                        mode="lines", name="Buy & Hold",
-                        line=dict(color="#8899aa", width=1.3, dash="dash"),
-                        hovertemplate="$%{y:,.0f}<extra>Buy & Hold</extra>"))
-
-                if fig_bt.data:
-                    fig_bt.add_hline(
-                        y=st.session_state["bt"]["metrics"]["starting_capital"],
-                        line=dict(color="#444", width=1, dash="dot"))
-                    fig_bt.update_layout(**_CHART, height=330 if bt_expanded else 110)
-                    fig_bt.update_yaxes(tickprefix="$", tickformat=",.0f")
-                    st.plotly_chart(fig_bt, use_container_width=True, config=_NO_TB)
+        bt_expanded = _panel_header("Backtest Engine", panel_key="backtest", help_md=_BT_HELP)
+        _render_backtest_panel(chart_height=260 if bt_expanded else 160)
 
     # ── Manual Trade (No Strategy) ────────────────────────────────────────────
-    st.markdown('<div id="manual"></div>', unsafe_allow_html=True)
-    with st.container(border=True):
+    bt_col.markdown('<div id="manual"></div>', unsafe_allow_html=True)
+    with bt_col.container(border=True):
         _panel_header("Manual Trade — No Strategy", """
 **How to use:**
 - Search any symbol (e.g. TSLA) and set the quantity.
@@ -858,7 +916,8 @@ with bt_col:
                     mt_price = info["price"]
                     owned_qty = sum(
                         db.get_strategy_holding(mt_sym, sk)
-                        for sk in ["rsi", "macd", "bollinger", "ema_crossover", "manual"]
+                        for sk in ["rsi", "macd", "bollinger", "ema_crossover",
+                                   "momentum", "short_ma", "manual"]
                     )
                     pi1, pi2, pi3 = st.columns(3)
                     pi1.metric("Live Price",  f"${mt_price:,.2f}")
@@ -902,6 +961,10 @@ with bt_col:
                             order_id=str(result.id), strategy="manual",
                             notes="manual order via dashboard",
                         )
+                        db.log("INFO",
+                               f"[MANUAL] {mt_side.upper()} {mt_qty} {mt_sym}"
+                               + (f" @ ${fill_price:,.2f}" if fill_price else "")
+                               + f" (user={uname})")
                         st.success(
                             f"Paper order submitted — {mt_side.upper()} {mt_qty}× {mt_sym}"
                             + (f" @ ${fill_price:,.2f}" if fill_price else "")
@@ -911,9 +974,9 @@ with bt_col:
                         st.error(str(ex))
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-with cfg_col:
-    st.markdown('<div id="config"></div>', unsafe_allow_html=True)
-    with st.container(border=True):
+if not BT_FULL:
+    cfg_col.markdown('<div id="config"></div>', unsafe_allow_html=True)
+    with cfg_col.container(border=True):
         _panel_header("Configuration", help_md="""
 **How to use:**
 - **Trading enabled** — master kill switch. Disable to halt all bot activity immediately.
@@ -934,6 +997,8 @@ with cfg_col:
             ne = st.toggle("Trading enabled (master switch)", value=en, disabled=GUEST)
             if ne != en and not GUEST:
                 db.set_config("trading_enabled","true" if ne else "false")
+                db.log("INFO",
+                       f"[DASHBOARD] Kill switch turned {'ON' if ne else 'OFF'} by {uname}")
                 st.rerun()
 
             st.markdown("---")
@@ -949,6 +1014,8 @@ with cfg_col:
                 "macd":         "trend-following (추세장)",
                 "bollinger":    "band breakout (고변동성)",
                 "ema_crossover":"golden/death cross",
+                "momentum":     "ROC momentum — frequent signals",
+                "short_ma":     "fast MA crossover — frequent signals",
             }
             max_eq = max(int(eq), 1)
 
@@ -1031,6 +1098,14 @@ with cfg_col:
                 c1,c2 = st.columns(2)
                 with c1: ef = st.number_input("Fast EMA",2, 50, int(cfg.get("ema_fast",9)),  key="ema_f", disabled=GUEST)
                 with c2: es = st.number_input("Slow EMA",5,200, int(cfg.get("ema_slow",21)), key="ema_s", disabled=GUEST)
+            with st.expander("Momentum (ROC)", expanded=("momentum" in enabled_strats)):
+                c1,c2 = st.columns(2)
+                with c1: mw  = st.number_input("Window (bars)", 1, 20,  int(cfg.get("momentum_window",3)),          key="mom_w", disabled=GUEST)
+                with c2: mth = st.number_input("Threshold %",  0.05, 5.0, float(cfg.get("momentum_threshold",0.3)), step=0.05, key="mom_th", disabled=GUEST)
+            with st.expander("Short MA Crossover", expanded=("short_ma" in enabled_strats)):
+                c1,c2 = st.columns(2)
+                with c1: smf = st.number_input("Fast window", 2, 30, int(cfg.get("short_ma_fast",5)),   key="sma_f", disabled=GUEST)
+                with c2: sms = st.number_input("Slow window", 5, 60, int(cfg.get("short_ma_slow",15)),  key="sma_s", disabled=GUEST)
 
             st.markdown("---")
 
@@ -1064,12 +1139,18 @@ with cfg_col:
                 db.set_config("macd_fast",str(mf)); db.set_config("macd_slow",str(ms)); db.set_config("macd_signal",str(msg))
                 db.set_config("bb_window",str(bw)); db.set_config("bb_std",str(bs))
                 db.set_config("ema_fast",str(ef)); db.set_config("ema_slow",str(es))
+                db.set_config("momentum_window",str(mw)); db.set_config("momentum_threshold",str(mth))
+                db.set_config("short_ma_fast",str(smf)); db.set_config("short_ma_slow",str(sms))
                 # Risk limits
                 db.set_config("position_pct",str(pct_r))
                 db.set_config("max_positions",str(mpos_r))
                 db.set_config("daily_loss_limit_pct",str(dloss_r))
                 db.set_config("max_drawdown_pct",str(mdd_r))
                 st.cache_data.clear()
+                db.log("INFO",
+                       f"[DASHBOARD] Config saved by {uname} — "
+                       f"strategies={enabled_strats or ['(none)']}, "
+                       f"top_n={int(top_n)}")
                 st.success("Configuration saved.")
                 st.rerun()
 

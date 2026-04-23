@@ -8,11 +8,15 @@ Registry of available strategies. To add a new strategy:
 from strategies.bollinger_strategy import BollingerStrategy
 from strategies.ema_crossover_strategy import EMACrossoverStrategy
 from strategies.macd_strategy import MACDStrategy
+from strategies.momentum_strategy import MomentumStrategy
 from strategies.rsi_strategy import RSIStrategy
+from strategies.short_ma_strategy import ShortMAStrategy
 
 STRATEGIES = {
     "rsi": RSIStrategy(),
     "macd": MACDStrategy(),
     "bollinger": BollingerStrategy(),
     "ema_crossover": EMACrossoverStrategy(),
+    "momentum": MomentumStrategy(),
+    "short_ma": ShortMAStrategy(),
 }

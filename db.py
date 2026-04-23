@@ -93,6 +93,10 @@ def init_db() -> None:
             ("slippage_bps", str(config.DEFAULT_SLIPPAGE_BPS)),
             ("active_strategy", config.DEFAULT_ACTIVE_STRATEGY),
             ("picker_top_n", str(config.DEFAULT_PICKER_TOP_N)),
+            ("momentum_window", str(config.DEFAULT_MOMENTUM_WINDOW)),
+            ("momentum_threshold", str(config.DEFAULT_MOMENTUM_THRESHOLD)),
+            ("short_ma_fast", str(config.DEFAULT_SHORT_MA_FAST)),
+            ("short_ma_slow", str(config.DEFAULT_SHORT_MA_SLOW)),
         ]
         conn.executemany(
             "INSERT OR IGNORE INTO bot_config (key, value, updated_at) VALUES (?, ?, ?)",

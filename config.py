@@ -24,6 +24,14 @@ DEFAULT_BB_STD = 2.0
 DEFAULT_EMA_FAST = 9
 DEFAULT_EMA_SLOW = 21
 
+# Momentum (ROC) strategy defaults — fires frequently
+DEFAULT_MOMENTUM_WINDOW = 3
+DEFAULT_MOMENTUM_THRESHOLD = 0.3   # percent
+
+# Short MA crossover defaults — fast moving-average crossover
+DEFAULT_SHORT_MA_FAST = 5
+DEFAULT_SHORT_MA_SLOW = 15
+
 # Position sizing
 DEFAULT_POSITION_PCT = 5.0       # % of equity per position
 DEFAULT_MAX_POSITIONS = 4
