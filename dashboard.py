@@ -354,24 +354,47 @@ def _trades_fig(trades: list, strategy_filter: list[str] | None,
             if col not in df.columns:
                 df[col] = default
         df["quantity"] = df["quantity"].astype(float)
+        # Bars for magnitude + markers so single trades are always visible
+        # even when quantities are tiny.
         for side, color, name in [("buy","#00c896","Buy"),("sell","#ff4b4b","Sell")]:
             sd = df[df["side"] == side].copy()
-            if not sd.empty:
-                fig.add_trace(go.Bar(
-                    x=sd["ts"], y=sd["quantity"], name=name,
-                    marker_color=color, marker_opacity=0.8,
-                    customdata=sd[["symbol","actual_price","strategy","timestamp"]].values,
-                    hovertemplate=(
-                        f"<b>%{{customdata[0]}}</b> — {name}<br>"
-                        "Qty: <b>%{y:.0f}</b><br>"
-                        "Price: $%{customdata[1]:.2f}<br>"
-                        "Strategy: %{customdata[2]}<br>"
-                        "%{customdata[3]}<extra></extra>")))
+            if sd.empty:
+                continue
+            cd = sd[["symbol","actual_price","strategy","timestamp"]].values
+            fig.add_trace(go.Bar(
+                x=sd["ts"], y=sd["quantity"], name=name,
+                marker_color=color, marker_opacity=0.85,
+                marker_line=dict(color=color, width=1),
+                customdata=cd,
+                hovertemplate=(
+                    f"<b>%{{customdata[0]}}</b> — {name}<br>"
+                    "Qty: <b>%{y:.0f}</b><br>"
+                    "Price: $%{customdata[1]:.2f}<br>"
+                    "Strategy: %{customdata[2]}<br>"
+                    "%{customdata[3]}<extra></extra>")))
+            # Marker dots on top of each bar so every trade is legible
+            fig.add_trace(go.Scatter(
+                x=sd["ts"], y=sd["quantity"], mode="markers",
+                name=f"{name} ·", showlegend=False,
+                marker=dict(size=7, color=color,
+                            line=dict(color="#0a0e1a", width=1)),
+                customdata=cd,
+                hovertemplate=(
+                    f"<b>%{{customdata[0]}}</b> — {name}<br>"
+                    "Qty: <b>%{y:.0f}</b><br>"
+                    "Price: $%{customdata[1]:.2f}<br>"
+                    "Strategy: %{customdata[2]}<br>"
+                    "%{customdata[3]}<extra></extra>")))
     else:
         fig.add_annotation(text="No trades recorded yet", x=0.5, y=0.5,
                            xref="paper", yref="paper", showarrow=False,
                            font=dict(color="#4a6a90", size=12))
-    fig.update_layout(**chart_cfg, height=height, barmode="overlay")
+    fig.update_layout(**chart_cfg, height=height, barmode="group",
+                      bargap=0.15, bargroupgap=0.05,
+                      legend=dict(orientation="h", yanchor="bottom", y=1.0,
+                                  xanchor="right", x=1.0,
+                                  bgcolor="rgba(0,0,0,0)", font=dict(size=10)))
+    fig.update_yaxes(title_text="Quantity", rangemode="tozero")
     return fig
 
 # ── Demo data ─────────────────────────────────────────────────────────────────
@@ -800,7 +823,7 @@ with main_left:
                 ph = wk
         if ph is not None:
             st.plotly_chart(_equity_fig(ph, trades, overlay_strats,
-                                        height=420 if eq_expanded else 140),
+                                        height=560 if eq_expanded else 320),
                             use_container_width=True, config=_NO_TB)
         else:
             st.info("No portfolio history available yet.")
@@ -822,7 +845,7 @@ with main_left:
                               label_visibility="collapsed",
                               placeholder="All strategies shown")
         st.plotly_chart(_trades_fig(trades, filt or None,
-                                    height=360 if tr_expanded else 120),
+                                    height=440 if tr_expanded else 280),
                         use_container_width=True, config=_NO_TB)
 
 with main_right:
@@ -916,7 +939,14 @@ with main_right:
                 cols = [c for c in ["timestamp","event"] if c in sdf.columns]
                 st.dataframe(sdf[cols], use_container_width=True, hide_index=True, height=70)
             else:
-                st.success("No safety events")
+                st.markdown(
+                    '<div style="display:flex;align-items:center;gap:6px;'
+                    'padding:6px 10px;margin-top:4px;background:rgba(0,200,150,0.08);'
+                    'border:1px solid rgba(0,200,150,0.3);border-radius:4px;">'
+                    '<span style="color:#00c896;font-size:0.85rem;">✓</span>'
+                    '<span style="color:#00c896;font-size:0.7rem;letter-spacing:0.04em;">'
+                    'No safety events</span></div>',
+                    unsafe_allow_html=True)
 
     # ── Bot Logs ──────────────────────────────────────────────────────────────
     st.markdown('<div id="logs"></div>', unsafe_allow_html=True)
