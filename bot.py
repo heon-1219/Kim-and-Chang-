@@ -12,6 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
 import yfinance as yf
+from alpaca.data.enums import DataFeed
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from alpaca.trading.enums import OrderSide, TimeInForce
@@ -91,6 +92,11 @@ def _fetch_bars_batch(symbols: list[str], bars_needed: int) -> dict[str, pd.Seri
         timeframe=_INTRADAY_TF,
         start=start,
         end=end,
+        # The Alpaca free plan disallows the default SIP feed for recent bars
+        # (HTTP 403 "subscription does not permit querying recent SIP data").
+        # IEX is allowed in real-time on the free plan; coverage is a subset
+        # of total volume but plenty for indicator-based strategies.
+        feed=DataFeed.IEX,
     )
     bars = broker.get_stock_bars(request)
     out: dict[str, pd.Series] = {}
