@@ -56,9 +56,10 @@ _STRAT_CLR = {
 _PIE_COLORS = ["#00c896","#4ecdc4","#f7b731","#a29bfe","#fd9644","#74b9ff","#ff6b9d","#c7ecee"]
 
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=30)
 def _cached_all_positions():
-    """Short-TTL cache so rapid page reruns don't each refetch positions."""
+    """30 s TTL — long enough that rapid reruns coalesce into one Alpaca call,
+    short enough that the positions panel still feels live."""
     return broker.get_all_positions()
 
 def _num_style(v) -> str:

@@ -87,11 +87,26 @@ def calculate_quantity(equity: float, price: float, position_pct: float) -> int:
     return max(int(equity * (position_pct / 100.0) / price), 0)
 
 
-def _current_prices_for(strategy_name: str) -> dict[str, float]:
-    """Latest known price per symbol held by this strategy, used to value open positions."""
+def _current_prices_for(strategy_name: str,
+                        bars_by_symbol: dict[str, pd.Series] | None = None) -> dict[str, float]:
+    """Latest known price per symbol held by this strategy, used to value open positions.
+
+    When `bars_by_symbol` is provided (the cycle's already-fetched batch), we
+    serve prices from it and skip the Alpaca call entirely — saving one data
+    call per fill on busy days. Symbols held but not in the batch (e.g. a
+    legacy holding that's no longer in any picker) are simply omitted;
+    `db.get_strategy_equity` tolerates a missing price.
+    """
     open_pos = list(db.get_strategy_open_positions(strategy_name))
     if not open_pos:
         return {}
+    if bars_by_symbol is not None:
+        out: dict[str, float] = {}
+        for sym in open_pos:
+            s = bars_by_symbol.get(sym)
+            if s is not None and not s.empty:
+                out[sym] = float(s.iloc[-1])
+        return out
     try:
         bars_by_sym = _fetch_bars_batch(open_pos, bars_needed=1)
     except Exception:
@@ -100,12 +115,13 @@ def _current_prices_for(strategy_name: str) -> dict[str, float]:
 
 
 def _notify_trade(strategy_name: str, symbol: str, side: str, qty: float,
-                  price: float, alloc_usd: float) -> None:
+                  price: float, alloc_usd: float,
+                  bars_by_symbol: dict[str, pd.Series] | None = None) -> None:
     """Compute per-strategy total asset then ship the rich Telegram alert."""
     try:
         # Include the just-filled trade's symbol in the price map so the freshly-
         # opened (or freshly-closed) position values correctly.
-        prices = _current_prices_for(strategy_name)
+        prices = _current_prices_for(strategy_name, bars_by_symbol)
         prices[symbol] = price
         total = db.get_strategy_equity(strategy_name, alloc_usd, prices)
     except Exception as e:
@@ -114,8 +130,33 @@ def _notify_trade(strategy_name: str, symbol: str, side: str, qty: float,
     notifications.send_trade_alert(strategy_name, symbol, side, qty, price, total)
 
 
+def _make_position_resolver():
+    """Lazy single-shot get_all_positions per cycle.
+
+    Returns a function `resolve(symbol)` that fetches Alpaca's full position
+    map on first call and serves all subsequent lookups from memory. Trades
+    one `get_all_positions` for N `get_open_position` calls — net win whenever
+    a cycle has ≥1 sell, neutral on cycles with no sells (the resolver is
+    never invoked).
+    """
+    cache: dict[str, object] = {}
+    fetched = [False]
+
+    def resolve(symbol: str):
+        if not fetched[0]:
+            try:
+                cache.update({p.symbol: p for p in broker.get_all_positions()})
+            except Exception:
+                pass
+            fetched[0] = True
+        return cache.get(symbol)
+
+    return resolve
+
+
 def place_buy(symbol: str, current_price: float, settings: dict,
-              strategy_name: str, alloc_pct: float, alloc_usd: float, account) -> None:
+              strategy_name: str, alloc_pct: float, alloc_usd: float, account,
+              bars_by_symbol: dict[str, pd.Series] | None = None) -> None:
     """Submit a buy sized to this strategy's allocated capital fraction."""
     pos_pct          = float(settings["position_pct"])
     allocated_equity = float(account.equity) * (alloc_pct / 100.0)
@@ -139,16 +180,21 @@ def place_buy(symbol: str, current_price: float, settings: dict,
         )
         msg = f"[{strategy_name.upper()}] BUY {qty} {symbol} @ ${current_price:.2f} (sim ${simulated_price:.2f})"
         db.log("INFO", msg)
-        _notify_trade(strategy_name, symbol, "buy", qty, current_price, alloc_usd)
+        _notify_trade(strategy_name, symbol, "buy", qty, current_price, alloc_usd, bars_by_symbol)
     except Exception as e:
         db.log("ERROR", f"[{strategy_name.upper()}] BUY {symbol} failed: {e}")
         notifications.send_alert(f"BUY {symbol} failed: {e}", "error")
 
 
 def place_sell(symbol: str, held_qty: float, current_price: float,
-               settings: dict, strategy_name: str, alloc_usd: float) -> None:
+               settings: dict, strategy_name: str, alloc_usd: float,
+               bars_by_symbol: dict[str, pd.Series] | None = None,
+               resolve_position=None) -> None:
     """Sell exactly the qty this strategy holds, capped by actual Alpaca position."""
-    actual_pos = broker.get_open_position(symbol)
+    if resolve_position is not None:
+        actual_pos = resolve_position(symbol)
+    else:
+        actual_pos = broker.get_open_position(symbol)
     if actual_pos is None:
         db.log("WARN", f"[{strategy_name.upper()}] {symbol}: position gone before sell")
         return
@@ -173,7 +219,7 @@ def place_sell(symbol: str, held_qty: float, current_price: float,
         )
         msg = f"[{strategy_name.upper()}] SELL {qty} {symbol} @ ${current_price:.2f} (sim ${simulated_price:.2f})"
         db.log("INFO", msg)
-        _notify_trade(strategy_name, symbol, "sell", qty, current_price, alloc_usd)
+        _notify_trade(strategy_name, symbol, "sell", qty, current_price, alloc_usd, bars_by_symbol)
     except Exception as e:
         db.log("ERROR", f"[{strategy_name.upper()}] SELL {symbol} failed: {e}")
         notifications.send_alert(f"SELL {symbol} failed: {e}", "error")
@@ -181,7 +227,9 @@ def place_sell(symbol: str, held_qty: float, current_price: float,
 
 def process_symbol(symbol: str, prices: pd.Series, settings: dict,
                    strategy_name: str, alloc_pct: float, alloc_usd: float,
-                   account) -> None:
+                   account,
+                   bars_by_symbol: dict[str, pd.Series] | None = None,
+                   resolve_position=None) -> None:
     """Run one strategy on one symbol and act on its signal.
 
     `prices` is the pre-fetched 15-min close series for `symbol` (shared
@@ -207,9 +255,11 @@ def process_symbol(symbol: str, prices: pd.Series, settings: dict,
     has_position = held_qty > 0
 
     if sig == "buy" and not has_position:
-        place_buy(symbol, current_price, settings, strategy_name, alloc_pct, alloc_usd, account)
+        place_buy(symbol, current_price, settings, strategy_name, alloc_pct, alloc_usd,
+                  account, bars_by_symbol)
     elif sig == "sell" and has_position:
-        place_sell(symbol, held_qty, current_price, settings, strategy_name, alloc_usd)
+        place_sell(symbol, held_qty, current_price, settings, strategy_name, alloc_usd,
+                   bars_by_symbol, resolve_position)
 
 
 def _load_active_strategies(settings: dict, account_equity: float) -> list[tuple[str, float, float]]:
@@ -338,7 +388,15 @@ def _send_open_ping_once(settings: dict) -> None:
 
 def run_one_cycle() -> None:
     """Run every enabled strategy across its own picked symbols."""
-    settings      = db.get_all_config()
+    settings = db.get_all_config()
+
+    # Bail before any API call when we're already near the cap — the original
+    # check sat after get_account + get_clock and burned 2 calls per skip.
+    if broker.is_rate_limited():
+        db.log("WARN", f"Near API rate limit, sleeping {config.RATE_LIMIT_SLEEP_SECONDS}s")
+        time.sleep(config.RATE_LIMIT_SLEEP_SECONDS)
+        return
+
     account       = broker.get_account()
     recent_trades = db.get_recent_trades(limit=20)
 
@@ -354,11 +412,6 @@ def run_one_cycle() -> None:
 
     # First cycle after the bell → send Telegram "trading live" ping
     _send_open_ping_once(settings)
-
-    if broker.is_rate_limited():
-        db.log("WARN", f"Near API rate limit, sleeping {config.RATE_LIMIT_SLEEP_SECONDS}s")
-        time.sleep(config.RATE_LIMIT_SLEEP_SECONDS)
-        return
 
     active_strategies = _load_active_strategies(settings, float(account.equity))
     if not active_strategies:
@@ -401,6 +454,10 @@ def run_one_cycle() -> None:
         db.log("ERROR", f"Batched bar fetch failed: {e}\n{traceback.format_exc()}")
         return
 
+    # Lazily fetched on the first sell of this cycle — collapses N per-sell
+    # `get_open_position` calls into a single `get_all_positions`.
+    resolve_position = _make_position_resolver()
+
     for strategy_name, alloc_pct, alloc_usd in active_strategies:
         symbols = per_strategy_symbols[strategy_name]
         db.log("INFO",
@@ -410,7 +467,8 @@ def run_one_cycle() -> None:
             prices = bars_by_symbol.get(symbol, pd.Series(dtype=float))
             try:
                 process_symbol(symbol, prices, settings, strategy_name,
-                               alloc_pct, alloc_usd, account)
+                               alloc_pct, alloc_usd, account,
+                               bars_by_symbol, resolve_position)
             except Exception as e:
                 db.log("ERROR", f"{strategy_name}/{symbol}: {e}\n{traceback.format_exc()}")
 

@@ -250,17 +250,18 @@ def _bar_html(label: str, pct: float, note: str = "") -> str:
         f'</div>'
     )
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=30)
 def _cached_account():
-    """Streamlit reruns the script on every interaction; cache for ~10 s so
-    rapid clicks don't each fire a fresh broker.get_account() call."""
+    """Streamlit reruns the script on every interaction; cache for ~30 s so
+    rapid clicks don't each fire a fresh broker.get_account() call. Account
+    snapshots feel "live" at 30 s — a tighter TTL just multiplies API load."""
     return broker.get_account()
 
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=30)
 def _cached_all_positions():
-    """Same idea as _cached_account — short TTL so the positions panel
-    doesn't hammer Alpaca on every rerun while still feeling live."""
+    """Same idea as _cached_account — 30 s TTL keeps the positions panel
+    responsive without hammering Alpaca on every rerun."""
     return broker.get_all_positions()
 
 
@@ -269,24 +270,22 @@ def _portfolio_history(period: str = "1D", timeframe: str = "1D") -> pd.DataFram
     """
     Fetch portfolio equity history. Alpaca rejects some period/timeframe pairs
     silently (empty timestamps) — e.g. intraday bars with long periods on
-    accounts without enough history. When the primary combo returns empty,
-    progressively fall back to safer combos so the chart always shows data.
+    accounts without enough history. We try the requested combo first, then
+    one well-chosen fallback per timeframe family — at most 2 calls per cache
+    miss (was up to 4).
     """
-    # Each entry is (period, timeframe). First = requested; rest = fallbacks.
-    attempts: list[tuple[str, str]] = [(period, timeframe)]
-    # Intraday bars: fall back to a shorter period, then to daily.
-    if timeframe in ("1Min", "5Min", "15Min"):
-        attempts += [("1D", timeframe), ("1M", "1D"), ("1A", "1D")]
-    elif timeframe == "1H":
-        attempts += [("1W", "1H"), ("1M", "1D"), ("1A", "1D")]
-    else:  # "1D" or anything else
-        attempts += [("1A", "1D"), ("1M", "1D"), ("1W", "1D")]
+    # One fallback per timeframe family, picked because daily bars over a
+    # 1-year window are the most reliably non-empty combo on a paper account.
+    if timeframe in ("1Min", "5Min", "15Min", "1H"):
+        fallback = ("1M", "1D")
+    else:
+        fallback = ("1A", "1D")
 
-    tried: set[tuple[str, str]] = set()
+    attempts: list[tuple[str, str]] = [(period, timeframe)]
+    if fallback != (period, timeframe):
+        attempts.append(fallback)
+
     for p, tf in attempts:
-        if (p, tf) in tried:
-            continue
-        tried.add((p, tf))
         try:
             ph = broker.get_portfolio_history(period=p, timeframe=tf)
             if not ph.timestamp:

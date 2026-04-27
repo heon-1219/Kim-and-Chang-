@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(uv sync *)",
-      "Bash(uv run *)"
+      "Bash(uv run *)",
+      "Bash(python -m py_compile broker.py bot.py)",
+      "Bash(python -m py_compile dashboard.py pages/positions.py)"
     ]
   }
 }

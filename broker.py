@@ -4,6 +4,7 @@ All Alpaca calls go through this module — never call clients directly elsewher
 """
 
 import os
+import time
 from functools import wraps
 
 from dotenv import load_dotenv
@@ -66,9 +67,29 @@ def get_all_positions():
     return trading_client.get_all_positions()
 
 
+_CLOCK_CACHE_TTL = 30.0
+_clock_cache: tuple[float, object] | None = None
+
+
 @track_api_call("get_clock")
-def get_clock():
+def _get_clock_uncached():
     return trading_client.get_clock()
+
+
+def get_clock():
+    """Return a recent market clock, TTL-cached for 30s.
+
+    The clock state changes twice a day (open/close), so a brief stale window
+    is harmless and saves duplicate calls — bot.run_one_cycle and
+    _compute_sleep_seconds previously fetched it twice per cycle.
+    """
+    global _clock_cache
+    now = time.time()
+    if _clock_cache is not None and (now - _clock_cache[0]) < _CLOCK_CACHE_TTL:
+        return _clock_cache[1]
+    clock = _get_clock_uncached()
+    _clock_cache = (now, clock)
+    return clock
 
 
 @track_api_call("submit_order")
