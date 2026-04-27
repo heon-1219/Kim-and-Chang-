@@ -174,14 +174,8 @@ def _notify_trade(strategy_name: str, symbol: str, side: str, qty: float,
 
 
 def _serialize_account(account) -> dict:
-    """Pull the few fields the dashboard reads. Stringified to survive any
-    Decimal vs float quirks in alpaca-py — the dashboard re-parses to float."""
-    return {
-        "equity":       str(getattr(account, "equity", "0")),
-        "cash":         str(getattr(account, "cash", "0")),
-        "buying_power": str(getattr(account, "buying_power", "0")),
-        "last_equity":  str(getattr(account, "last_equity", "0")),
-    }
+    """Persist Alpaca's account payload in a dashboard-friendly shape."""
+    return broker.account_to_snapshot(account)
 
 
 def _serialize_positions(positions) -> list[dict]:
@@ -529,10 +523,10 @@ def run_one_cycle() -> None:
         return
 
     # Refresh the dashboard's data layer. This is the only place the codebase
-    # writes to the snapshots table — the dashboard reads from it, never calls
-    # Alpaca directly. Halted / closed cycles return earlier and produce no
-    # snapshot updates, which is the desired behavior (zero Alpaca calls when
-    # not trading).
+    # writes the broad dashboard data layer. The dashboard may refresh the
+    # account snapshot for current top-line balances, but positions/history
+    # remain bot-written. Halted / closed cycles return earlier and produce no
+    # position/history snapshot updates.
     _update_dashboard_snapshots(account)
 
     # First cycle after the bell → send Telegram "trading live" ping.

@@ -279,15 +279,40 @@ def _bar_html(label: str, pct: float, note: str = "") -> str:
 
 class _SnapAccount:
     """Lightweight stand-in for an Alpaca Account object, populated from the
-    snapshots table. The rest of the dashboard accesses .equity/.cash/etc. as
-    strings (it coerces with float()), so we keep the same shape."""
-    __slots__ = ("equity", "cash", "buying_power", "last_equity")
+    snapshots table. Account payloads can contain more fields than the top
+    metrics use, so keep the raw dict and expose attribute-style access."""
+    __slots__ = ("_data",)
 
     def __init__(self, d: dict) -> None:
-        self.equity       = d.get("equity",       "0")
-        self.cash         = d.get("cash",         "0")
-        self.buying_power = d.get("buying_power", "0")
-        self.last_equity  = d.get("last_equity",  "0")
+        self._data = d
+
+    def __getattr__(self, name: str):
+        return self._data.get(name, "0")
+
+    def get(self, name: str, default=None):
+        return self._data.get(name, default)
+
+
+def _to_float(value, default: float = 0.0) -> float:
+    if value is None or value == "":
+        return default
+    try:
+        return float(str(value).replace(",", ""))
+    except (TypeError, ValueError):
+        return default
+
+
+def _account_float(ac: _SnapAccount | object | None, *fields: str) -> float:
+    if ac is None:
+        return 0.0
+    for field in fields:
+        if hasattr(ac, "get"):
+            value = ac.get(field, None)
+        else:
+            value = getattr(ac, field, None)
+        if value not in (None, ""):
+            return _to_float(value)
+    return 0.0
 
 
 class _SnapPosition:
@@ -305,10 +330,26 @@ class _SnapPosition:
         self.unrealized_plpc  = d.get("unrealized_plpc", "0")
 
 
-def _cached_account() -> _SnapAccount | None:
-    """Read the bot-written account snapshot. Never calls Alpaca — the dashboard
-    is a viewer; only the bot's trading cycle hits the API."""
+@st.cache_data(ttl=60, show_spinner=False)
+def _refresh_account_snapshot() -> dict | None:
+    """Fetch a live account snapshot for the top metrics."""
+    try:
+        raw = broker.account_to_snapshot(broker.get_account(force=True))
+        db.set_snapshot("account", raw)
+        return raw
+    except Exception as ex:
+        db.log("WARN", f"dashboard account refresh failed: {ex}")
+        return None
+
+
+def _cached_account(force_live: bool = False) -> _SnapAccount | None:
+    """Read the account snapshot, refreshing it when missing or stale."""
     raw = db.get_snapshot("account")
+    age = db.get_snapshot_age_seconds("account")
+    if force_live or not isinstance(raw, dict) or age is None or age > 120:
+        fresh = _refresh_account_snapshot()
+        if isinstance(fresh, dict):
+            raw = fresh
     if not isinstance(raw, dict):
         return None
     return _SnapAccount(raw)
@@ -875,19 +916,23 @@ uname   = st.session_state.get("username", "—")
 trades  = _demo_trades() if DEMO else db.get_recent_trades(limit=50)
 logs    = _demo_logs()   if DEMO else db.get_recent_logs(limit=500)
 
+_force_account_refresh = (
+    False if DEMO else bool(st.session_state.pop("_force_account_refresh", False))
+)
+
 try:
-    ac   = _demo_account() if DEMO else _cached_account()
+    ac   = _demo_account() if DEMO else _cached_account(force_live=_force_account_refresh)
     if ac is None:
-        eq = cash = bp = pnl = pp = 0.0
+        eq = available = bp = pnl = pp = 0.0
     else:
-        eq   = float(ac.equity)
-        cash = float(ac.cash)
-        bp   = float(ac.buying_power)
-        leq  = float(ac.last_equity)
+        eq        = _account_float(ac, "equity", "portfolio_value")
+        available = _account_float(ac, "non_marginable_buying_power", "cash", "buying_power")
+        bp        = _account_float(ac, "buying_power", "daytrading_buying_power", "regt_buying_power")
+        leq       = _account_float(ac, "last_equity", "equity", "portfolio_value")
         pnl  = eq - leq
         pp   = (pnl / leq * 100) if leq else 0.0
 except Exception:
-    eq = cash = bp = pnl = pp = 0.0
+    eq = available = bp = pnl = pp = 0.0
 
 # Snapshot age — used to show "stale" labels in the header when the bot
 # hasn't refreshed the data layer recently (e.g. trading halted, market
@@ -997,6 +1042,7 @@ with right_hdr:
                 unsafe_allow_html=True)
     with r_col:
         if st.button("↺", help="Refresh", use_container_width=True):
+            st.session_state["_force_account_refresh"] = True
             st.cache_data.clear(); st.rerun()
     with l_col:
         if st.button("⏻", help="Sign out", use_container_width=True):
@@ -1039,7 +1085,7 @@ if not BT_FULL:
 </div>""", unsafe_allow_html=True)
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Portfolio Balance",  f"${eq:,.2f}")
-    m2.metric("Cash Available",     f"${cash:,.2f}")
+    m2.metric("Available Balance",  f"${available:,.2f}")
     m3.metric("Buying Power",       f"${bp:,.2f}")
     m4.metric("Today P&L",         f"${pnl:+,.2f}", delta=f"{pp:+.2f}%")
 

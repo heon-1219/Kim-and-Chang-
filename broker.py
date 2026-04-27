@@ -73,6 +73,51 @@ def _get_account_uncached():
     return trading_client.get_account()
 
 
+def account_to_snapshot(account) -> dict:
+    """Return a JSON-friendly account payload for dashboard snapshots.
+
+    Alpaca adds account fields over time. Preserve the full SDK payload when
+    possible, then guarantee the fields the dashboard always needs.
+    """
+    if hasattr(account, "model_dump"):
+        try:
+            data = account.model_dump(mode="json")
+        except TypeError:
+            data = account.model_dump()
+    elif hasattr(account, "dict"):
+        data = account.dict()
+    else:
+        data = {
+            name: getattr(account, name)
+            for name in dir(account)
+            if not name.startswith("_") and not callable(getattr(account, name))
+        }
+
+    required_fields = (
+        "equity",
+        "portfolio_value",
+        "cash",
+        "buying_power",
+        "non_marginable_buying_power",
+        "daytrading_buying_power",
+        "regt_buying_power",
+        "last_equity",
+    )
+    for field in required_fields:
+        value = data.get(field, None)
+        if value is None:
+            value = getattr(account, field, None)
+        if value is not None:
+            data[field] = str(value)
+
+    if not data.get("portfolio_value"):
+        data["portfolio_value"] = data.get("equity", "0")
+    if not data.get("non_marginable_buying_power"):
+        data["non_marginable_buying_power"] = data.get("cash", "0")
+
+    return data
+
+
 def get_account(force: bool = False):
     """Return a recent account snapshot, TTL-cached for 90s.
 
