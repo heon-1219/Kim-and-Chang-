@@ -78,7 +78,13 @@ def _fetch_bars_batch(symbols: list[str], bars_needed: int) -> dict[str, pd.Seri
     """
     if not symbols:
         return {}
-    end = datetime.utcnow()
+    # Belt + suspenders for the free-plan 15-min restriction. Alpaca's free
+    # plan rejects bar requests whose `end` falls inside the last 15 minutes
+    # (the "subscription does not permit querying recent SIP data" 403). IEX
+    # feed avoids this for real-time data, but shifting `end` back 16 min as
+    # well costs us nothing — indicators read CLOSED bars, not the in-flight
+    # partial bar — and stays correct if Alpaca ever tightens IEX rules.
+    end = datetime.utcnow() - timedelta(minutes=16)
     # Pull a tight calendar window around `bars_needed`. Old math (×2 + 5) was
     # paranoid and pushed responses past Alpaca's ~10k-bars-per-page threshold,
     # which the SDK silently splits into multiple HTTP hits — each counted by
@@ -92,10 +98,8 @@ def _fetch_bars_batch(symbols: list[str], bars_needed: int) -> dict[str, pd.Seri
         timeframe=_INTRADAY_TF,
         start=start,
         end=end,
-        # The Alpaca free plan disallows the default SIP feed for recent bars
-        # (HTTP 403 "subscription does not permit querying recent SIP data").
-        # IEX is allowed in real-time on the free plan; coverage is a subset
-        # of total volume but plenty for indicator-based strategies.
+        # Free plan: real-time IEX is allowed; SIP requires a paid sub. IEX
+        # covers a subset of total volume but is fine for indicator signals.
         feed=DataFeed.IEX,
     )
     bars = broker.get_stock_bars(request)
