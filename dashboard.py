@@ -144,6 +144,33 @@ div[data-testid="stVerticalBlock"]   { gap: 0.25rem !important; }
   .kc-nav a:active { color:#00d4aa; border-color:#00d4aa; }
   .block-container { padding-bottom:8px !important; }
 }
+
+/* ── Header API counter dropdown ── */
+details.kc-api-details { display:inline-block; position:relative; }
+details.kc-api-details > summary {
+    cursor:pointer; user-select:none; list-style:none;
+    font-size:0.72rem; color:#6b8bb0;
+}
+details.kc-api-details > summary::-webkit-details-marker { display:none; }
+details.kc-api-details > summary::marker { content:""; }
+details.kc-api-details[open] > summary { color:#00d4aa; }
+details.kc-api-details > .kc-api-pop {
+    position:absolute; top:1.4em; left:0; z-index:1000;
+    background:#0d1526; border:1px solid #1e3a5f; border-radius:4px;
+    padding:8px 12px; min-width:240px;
+    box-shadow:0 4px 16px rgba(0,0,0,0.5);
+    font-size:0.7rem; color:#e2e8f0;
+}
+details.kc-api-details .kc-api-pop-title {
+    color:#00d4aa; font-size:0.55rem; letter-spacing:0.1em;
+    text-transform:uppercase; margin-bottom:6px;
+}
+details.kc-api-details .kc-api-pop-row {
+    display:flex; justify-content:space-between; gap:1.5rem;
+    padding:2px 0; font-family:monospace;
+}
+details.kc-api-details .kc-api-pop-row b { color:#e2e8f0; }
+details.kc-api-details .kc-api-pop-empty { color:#4a6a90; font-style:italic; }
 </style>""", unsafe_allow_html=True)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -908,6 +935,31 @@ if _acct_age_s is not None:
 elif not DEMO:
     _data_age_lbl = "no data yet"
 
+# Clickable API counter: native <details>/<summary> for breakdown by endpoint.
+# No Streamlit interaction needed — pure HTML/CSS, doesn't trigger reruns.
+_api_color = "#ffa500" if _data_stale else "#6b8bb0"
+_api_label = (
+    f'API {api_n}/200'
+    + (f' · {_data_age_lbl}' if _data_age_lbl else '')
+)
+if api_breakdown:
+    _api_rows = "".join(
+        f'<div class="kc-api-pop-row"><span>{ep}</span><b>{cnt}</b></div>'
+        for ep, cnt in api_breakdown
+    )
+else:
+    _api_rows = '<div class="kc-api-pop-empty">No tracked calls in last 60s</div>'
+
+_api_details_html = (
+    f'<details class="kc-api-details">'
+    f'<summary style="color:{_api_color};">▾ {_api_label}</summary>'
+    f'<div class="kc-api-pop">'
+    f'<div class="kc-api-pop-title">Last 60s · per endpoint</div>'
+    f'{_api_rows}'
+    f'</div>'
+    f'</details>'
+)
+
 with left_hdr:
     st.markdown(
         f'<div style="display:flex;align-items:baseline;gap:0.8rem;flex-wrap:wrap;padding:0.2rem 0;">'
@@ -920,8 +972,8 @@ with left_hdr:
         f'<span style="font-size:0.72rem;color:#6b8bb0;">'
         f'<b style="color:#e2e8f0;">{n_active_strats}</b> '
         f'{"strategy" if n_active_strats == 1 else "strategies"} active</span>'
-        f'<span style="font-size:0.72rem;color:{"#ffa500" if _data_stale else "#6b8bb0"};">'
-        f'API {api_n}/200{(" · " + _data_age_lbl) if _data_age_lbl else ""} &nbsp; '
+        f'{_api_details_html}'
+        f'<span style="font-size:0.72rem;color:#6b8bb0;">'
         f'{now_utc.strftime("%H:%M UTC")}</span>'
         f'</div>',
         unsafe_allow_html=True)
@@ -949,13 +1001,6 @@ with right_hdr:
     with l_col:
         if st.button("⏻", help="Sign out", use_container_width=True):
             st.session_state.clear(); st.rerun()
-
-# Diagnostic: per-endpoint API call breakdown over the last 60s. Auto-shown
-# only when we're north of the warning threshold so usual operation stays
-# uncluttered. Helps attribute a 200/min spike to a specific endpoint.
-if api_breakdown and api_n > 50:
-    parts = "  ·  ".join(f"{ep}: {cnt}" for ep, cnt in api_breakdown[:6])
-    st.caption(f"🔍 API breakdown (last 60s): {parts}")
 
 # ── Backtest fullscreen mode: render only the backtest and halt the script ──
 
