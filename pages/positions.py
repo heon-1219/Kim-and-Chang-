@@ -9,7 +9,6 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 
-import broker
 import db
 from strategies import STRATEGIES
 
@@ -56,13 +55,29 @@ _STRAT_CLR = {
 _PIE_COLORS = ["#00c896","#4ecdc4","#f7b731","#a29bfe","#fd9644","#74b9ff","#ff6b9d","#c7ecee"]
 
 
-@st.cache_data(ttl=120)
-def _cached_all_positions():
-    """120 s TTL keyed only on this page. The underlying broker.get_all_positions
-    has its own 90 s module-level cache shared with the main dashboard, so a
-    cross-page navigation hit lands on a warm cache instead of firing a fresh
-    Alpaca call."""
-    return broker.get_all_positions()
+class _SnapPosition:
+    """Stand-in for an Alpaca Position — same shape the live SDK returns,
+    populated from the bot-written snapshot so this page never calls Alpaca."""
+    __slots__ = ("symbol", "qty", "avg_entry_price", "current_price",
+                 "market_value", "unrealized_pl", "unrealized_plpc")
+
+    def __init__(self, d: dict) -> None:
+        self.symbol           = d.get("symbol", "")
+        self.qty              = d.get("qty", "0")
+        self.avg_entry_price  = d.get("avg_entry_price", "0")
+        self.current_price    = d.get("current_price", "0")
+        self.market_value     = d.get("market_value", "0")
+        self.unrealized_pl    = d.get("unrealized_pl", "0")
+        self.unrealized_plpc  = d.get("unrealized_plpc", "0")
+
+
+def _cached_all_positions() -> list[_SnapPosition]:
+    """Read from the bot-written snapshot. Never calls Alpaca; the bot keeps
+    this fresh during healthy trading cycles."""
+    raw = db.get_snapshot("positions")
+    if not isinstance(raw, list):
+        return []
+    return [_SnapPosition(p) for p in raw]
 
 def _num_style(v) -> str:
     try:

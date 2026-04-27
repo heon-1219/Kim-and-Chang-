@@ -2,6 +2,7 @@
 SQLite database layer. All database access goes through this module.
 """
 
+import json
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
@@ -76,6 +77,15 @@ def init_db() -> None:
                 triggered_stop INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_safety_time ON safety_events(timestamp DESC);
+
+            -- Read-only data the bot fetches from Alpaca and the dashboard
+            -- consumes. Lets the dashboard avoid hitting Alpaca for displays —
+            -- only the bot (during a trading cycle) calls Alpaca for reads.
+            CREATE TABLE IF NOT EXISTS snapshots (
+                key TEXT PRIMARY KEY,
+                value_json TEXT NOT NULL,
+                updated_at DATETIME NOT NULL
+            );
         """)
 
         now = datetime.utcnow().isoformat()
@@ -325,6 +335,51 @@ def count_recent_api_calls(seconds: int = 60) -> int:
             (f"-{seconds}",),
         ).fetchone()
         return row["cnt"]
+
+
+# --- Snapshots (bot-written, dashboard-read; keeps dashboard off Alpaca) ---
+
+def set_snapshot(key: str, value) -> None:
+    """Store a JSON-serialisable value under `key`. Bot writes; dashboard reads."""
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO snapshots (key, value_json, updated_at)
+               VALUES (?, ?, ?)
+               ON CONFLICT(key) DO UPDATE SET
+                 value_json = excluded.value_json,
+                 updated_at = excluded.updated_at""",
+            (key, json.dumps(value, default=str), datetime.utcnow().isoformat()),
+        )
+        conn.commit()
+
+
+def get_snapshot(key: str):
+    """Return the parsed JSON value, or None if the key has never been written."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT value_json FROM snapshots WHERE key = ?", (key,)
+        ).fetchone()
+        if row is None:
+            return None
+        try:
+            return json.loads(row["value_json"])
+        except json.JSONDecodeError:
+            return None
+
+
+def get_snapshot_age_seconds(key: str) -> float | None:
+    """Seconds since `key` was last updated, or None if missing."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT updated_at FROM snapshots WHERE key = ?", (key,)
+        ).fetchone()
+        if row is None:
+            return None
+        try:
+            updated = datetime.fromisoformat(row["updated_at"])
+        except (ValueError, TypeError):
+            return None
+        return (datetime.utcnow() - updated).total_seconds()
 
 
 def api_call_breakdown(seconds: int = 60) -> list[tuple[str, int]]:

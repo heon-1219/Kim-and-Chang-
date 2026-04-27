@@ -250,55 +250,72 @@ def _bar_html(label: str, pct: float, note: str = "") -> str:
         f'</div>'
     )
 
-@st.cache_data(ttl=120)
-def _cached_account():
-    """Streamlit reruns the script on every interaction; cache for ~120 s so
-    rapid clicks don't each fire a fresh broker.get_account() call. Even if
-    this entry is cleared by the Refresh button, broker.py keeps a 90 s
-    module-level cache so the actual Alpaca call rate stays bounded."""
-    return broker.get_account()
+class _SnapAccount:
+    """Lightweight stand-in for an Alpaca Account object, populated from the
+    snapshots table. The rest of the dashboard accesses .equity/.cash/etc. as
+    strings (it coerces with float()), so we keep the same shape."""
+    __slots__ = ("equity", "cash", "buying_power", "last_equity")
+
+    def __init__(self, d: dict) -> None:
+        self.equity       = d.get("equity",       "0")
+        self.cash         = d.get("cash",         "0")
+        self.buying_power = d.get("buying_power", "0")
+        self.last_equity  = d.get("last_equity",  "0")
 
 
-@st.cache_data(ttl=120)
-def _cached_all_positions():
-    """120 s TTL — long enough that rapid reruns coalesce, short enough that
-    the positions panel still feels live. broker.get_all_positions() also has
-    its own 90 s cache shared with pages/positions.py and the bot."""
-    return broker.get_all_positions()
+class _SnapPosition:
+    """Stand-in for an Alpaca Position object, populated from snapshots."""
+    __slots__ = ("symbol", "qty", "avg_entry_price", "current_price",
+                 "market_value", "unrealized_pl", "unrealized_plpc")
+
+    def __init__(self, d: dict) -> None:
+        self.symbol           = d.get("symbol", "")
+        self.qty              = d.get("qty", "0")
+        self.avg_entry_price  = d.get("avg_entry_price", "0")
+        self.current_price    = d.get("current_price", "0")
+        self.market_value     = d.get("market_value", "0")
+        self.unrealized_pl    = d.get("unrealized_pl", "0")
+        self.unrealized_plpc  = d.get("unrealized_plpc", "0")
 
 
-@st.cache_data(ttl=600)
+def _cached_account() -> _SnapAccount | None:
+    """Read the bot-written account snapshot. Never calls Alpaca — the dashboard
+    is a viewer; only the bot's trading cycle hits the API."""
+    raw = db.get_snapshot("account")
+    if not isinstance(raw, dict):
+        return None
+    return _SnapAccount(raw)
+
+
+def _cached_all_positions() -> list[_SnapPosition]:
+    """Read the bot-written positions snapshot. Returns an empty list when no
+    snapshot exists yet (e.g., bot has never run a healthy cycle)."""
+    raw = db.get_snapshot("positions")
+    if not isinstance(raw, list):
+        return []
+    return [_SnapPosition(p) for p in raw]
+
+
 def _portfolio_history(period: str = "1D", timeframe: str = "1D") -> pd.DataFrame | None:
-    """
-    Fetch portfolio equity history. Alpaca rejects some period/timeframe pairs
-    silently (empty timestamps) — e.g. intraday bars with long periods on
-    accounts without enough history. We try the requested combo first, then
-    one well-chosen fallback per timeframe family — at most 2 calls per cache
-    miss (was up to 4).
-    """
-    # One fallback per timeframe family, picked because daily bars over a
-    # 1-year window are the most reliably non-empty combo on a paper account.
-    if timeframe in ("1Min", "5Min", "15Min", "1H"):
-        fallback = ("1M", "1D")
-    else:
-        fallback = ("1A", "1D")
+    """Read the bot-written portfolio-history snapshot for `(period, timeframe)`.
+    The bot pre-fetches every period the dashboard exposes; if a particular
+    combo is missing the chart simply renders empty for that selection."""
+    raw = db.get_snapshot(f"portfolio_{period}_{timeframe}")
+    if not isinstance(raw, dict):
+        return None
+    ts = raw.get("timestamp") or []
+    eq = raw.get("equity") or []
+    if not ts or not eq:
+        return None
+    df = pd.DataFrame({
+        "date":   pd.to_datetime(ts, unit="s"),
+        "equity": eq,
+    }).dropna()
+    return df if not df.empty else None
 
-    attempts: list[tuple[str, str]] = [(period, timeframe)]
-    if fallback != (period, timeframe):
-        attempts.append(fallback)
 
-    for p, tf in attempts:
-        try:
-            ph = broker.get_portfolio_history(period=p, timeframe=tf)
-            if not ph.timestamp:
-                continue
-            df = pd.DataFrame({"date": pd.to_datetime(ph.timestamp, unit="s"),
-                               "equity": ph.equity}).dropna()
-            if not df.empty:
-                return df
-        except Exception:
-            continue
-    return None
+def _snapshot_age(key: str) -> float | None:
+    return db.get_snapshot_age_seconds(key)
 
 _MARKET_INDICES = [
     ("^GSPC", "S&P 500"),
@@ -833,14 +850,23 @@ logs    = _demo_logs()   if DEMO else db.get_recent_logs(limit=500)
 
 try:
     ac   = _demo_account() if DEMO else _cached_account()
-    eq   = float(ac.equity)
-    cash = float(ac.cash)
-    bp   = float(ac.buying_power)
-    leq  = float(ac.last_equity)
-    pnl  = eq - leq
-    pp   = (pnl / leq * 100) if leq else 0.0
+    if ac is None:
+        eq = cash = bp = pnl = pp = 0.0
+    else:
+        eq   = float(ac.equity)
+        cash = float(ac.cash)
+        bp   = float(ac.buying_power)
+        leq  = float(ac.last_equity)
+        pnl  = eq - leq
+        pp   = (pnl / leq * 100) if leq else 0.0
 except Exception:
     eq = cash = bp = pnl = pp = 0.0
+
+# Snapshot age — used to show "stale" labels in the header when the bot
+# hasn't refreshed the data layer recently (e.g. trading halted, market
+# closed, or bot offline).
+_acct_age_s = None if DEMO else db.get_snapshot_age_seconds("account")
+_data_stale = _acct_age_s is not None and _acct_age_s > 600  # >10 min
 
 if hb:
     age_min = int((now_utc - datetime.fromisoformat(hb["last_beat"])).total_seconds() / 60)
@@ -871,6 +897,17 @@ BT_FULL = bool(st.session_state.get("_fsstate_backtest", False))
 
 left_hdr, right_hdr = st.columns([7, 3])
 
+_data_age_lbl = ""
+if _acct_age_s is not None:
+    if _acct_age_s < 60:
+        _data_age_lbl = f"data {int(_acct_age_s)}s old"
+    elif _acct_age_s < 3600:
+        _data_age_lbl = f"data {int(_acct_age_s / 60)}m old"
+    else:
+        _data_age_lbl = f"data {int(_acct_age_s / 3600)}h old"
+elif not DEMO:
+    _data_age_lbl = "no data yet"
+
 with left_hdr:
     st.markdown(
         f'<div style="display:flex;align-items:baseline;gap:0.8rem;flex-wrap:wrap;padding:0.2rem 0;">'
@@ -883,7 +920,8 @@ with left_hdr:
         f'<span style="font-size:0.72rem;color:#6b8bb0;">'
         f'<b style="color:#e2e8f0;">{n_active_strats}</b> '
         f'{"strategy" if n_active_strats == 1 else "strategies"} active</span>'
-        f'<span style="font-size:0.72rem;color:#6b8bb0;">API {api_n}/200 &nbsp; '
+        f'<span style="font-size:0.72rem;color:{"#ffa500" if _data_stale else "#6b8bb0"};">'
+        f'API {api_n}/200{(" · " + _data_age_lbl) if _data_age_lbl else ""} &nbsp; '
         f'{now_utc.strftime("%H:%M UTC")}</span>'
         f'</div>',
         unsafe_allow_html=True)
@@ -1292,13 +1330,10 @@ with main_right:
                             f"Paper order submitted — {mt_side.upper()} {mt_qty}× {mt_sym}"
                             + (f" @ ${fill_price:,.2f}" if fill_price else "")
                         )
-                        # Bust caches so the positions / account panels reflect
-                        # the fill on the next render. broker.submit_order
-                        # already cleared its module-level cache; these clear
-                        # the Streamlit-layer caches stacked on top.
+                        # The next bot cycle will refresh the positions /
+                        # account snapshots; nothing to clear here. Just clear
+                        # the yfinance chart cache for this symbol.
                         _stock_info.clear()
-                        _cached_account.clear()
-                        _cached_all_positions.clear()
                     except Exception as ex:
                         st.error(str(ex))
 

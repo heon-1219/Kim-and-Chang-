@@ -36,6 +36,26 @@ _BARS_PER_TRADING_DAY = 26  # 6.5 hours * 4 fifteen-minute bars
 # 200/min cap even though the SDK surface returns one value.
 _BARS_FETCH_CAP = 80
 
+# Hard floor on bot loop interval so even a wedged loop can't burst-call Alpaca.
+# A halted/closed bot should sleep way longer than this anyway; this is the
+# ceiling on call rate, not a target cadence.
+_MIN_LOOP_SECONDS = 60
+
+# (period, timeframe) combos the dashboard exposes via its Period dropdown.
+# The bot pre-fetches all of them each healthy cycle so the dashboard can
+# render the equity chart without touching Alpaca itself.
+_PORTFOLIO_PERIODS: list[tuple[str, str]] = [
+    ("1D",  "1Min"),
+    ("1D",  "5Min"),
+    ("5D",  "15Min"),
+    ("1W",  "15Min"),
+    ("1W",  "1H"),
+    ("1M",  "1H"),
+    ("1M",  "1D"),
+    ("1A",  "1D"),
+    ("5A",  "1D"),
+]
+
 # (date, {strategy_name: [symbols...]}) — rebuilt at most once per calendar day
 _PICKED_SYMBOLS: dict[str, tuple[date, list[str]]] = {}
 
@@ -141,6 +161,66 @@ def _notify_trade(strategy_name: str, symbol: str, side: str, qty: float,
         db.log("WARN", f"Failed to compute {strategy_name} equity: {e}")
         total = alloc_usd
     notifications.send_trade_alert(strategy_name, symbol, side, qty, price, total)
+
+
+def _serialize_account(account) -> dict:
+    """Pull the few fields the dashboard reads. Stringified to survive any
+    Decimal vs float quirks in alpaca-py — the dashboard re-parses to float."""
+    return {
+        "equity":       str(getattr(account, "equity", "0")),
+        "cash":         str(getattr(account, "cash", "0")),
+        "buying_power": str(getattr(account, "buying_power", "0")),
+        "last_equity":  str(getattr(account, "last_equity", "0")),
+    }
+
+
+def _serialize_positions(positions) -> list[dict]:
+    return [
+        {
+            "symbol":           p.symbol,
+            "qty":              str(p.qty),
+            "avg_entry_price":  str(p.avg_entry_price),
+            "current_price":    str(p.current_price),
+            "market_value":     str(p.market_value),
+            "unrealized_pl":    str(p.unrealized_pl),
+            "unrealized_plpc":  str(p.unrealized_plpc),
+        }
+        for p in positions
+    ]
+
+
+def _update_dashboard_snapshots(account) -> None:
+    """Persist account + positions + portfolio history to the snapshots table.
+
+    The dashboard reads from these instead of calling Alpaca directly, so
+    the only process making Alpaca read calls is the bot during a healthy
+    trading cycle. Per-call exceptions are swallowed: a missing portfolio
+    period just means the dashboard shows stale data for that period.
+    """
+    try:
+        db.set_snapshot("account", _serialize_account(account))
+    except Exception as e:
+        db.log("WARN", f"snapshot[account] failed: {e}")
+
+    try:
+        positions = broker.get_all_positions()
+        db.set_snapshot("positions", _serialize_positions(positions))
+    except Exception as e:
+        db.log("WARN", f"snapshot[positions] failed: {e}")
+
+    for period, tf in _PORTFOLIO_PERIODS:
+        try:
+            ph = broker.get_portfolio_history(period=period, timeframe=tf)
+            if not getattr(ph, "timestamp", None):
+                continue
+            db.set_snapshot(
+                f"portfolio_{period}_{tf}",
+                {"timestamp": list(ph.timestamp), "equity": list(ph.equity)},
+            )
+        except Exception:
+            # Some (period, tf) combos are invalid for paper accounts; skip
+            # silently so a flaky combo doesn't pollute the log.
+            pass
 
 
 def _make_position_resolver():
@@ -438,6 +518,13 @@ def run_one_cycle() -> None:
         db.log("WARN", f"Safety stop: {reason}")
         return
 
+    # Refresh the dashboard's data layer. This is the only place the codebase
+    # writes to the snapshots table — the dashboard reads from it, never calls
+    # Alpaca directly. Halted / closed cycles return earlier and produce no
+    # snapshot updates, which is the desired behavior (zero Alpaca calls when
+    # not trading).
+    _update_dashboard_snapshots(account)
+
     # First cycle after the bell → send Telegram "trading live" ping.
     # Reuse the account snapshot we just fetched.
     _send_open_ping_once(settings, account)
@@ -569,6 +656,11 @@ def main() -> None:
             notifications.send_alert(f"Cycle exception: {e}", "error")
 
         sleep_s, reason = _compute_sleep_seconds()
+        # Hard floor: even if every Alpaca call fails fast or the cycle short-
+        # circuits, we never burn through the loop more than once per minute.
+        # Caps API blast in any pathological state (multiple processes, crash
+        # loops, clock-cache poisoning).
+        sleep_s = max(sleep_s, _MIN_LOOP_SECONDS)
         db.log("INFO", f"Sleeping {sleep_s}s ({reason})...")
         time.sleep(sleep_s)
 
