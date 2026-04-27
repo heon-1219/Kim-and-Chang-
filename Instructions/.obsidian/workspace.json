@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "sessions/session0423.md",
+                "file": "09_PHASE_DEPLOY.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "session0423"
+              "title": "09_PHASE_DEPLOY"
             }
           }
         ]
@@ -185,14 +185,17 @@
   },
   "active": "1838aaf0c84c8dfe",
   "lastOpenFiles": [
+    "06_PHASE_STRATEGIES.md",
+    "01_PHASE_SCAFFOLDING.md",
+    "00_OVERALL_PLAN.md",
+    "sessions/session0423.md",
+    "Untitled.md",
     "sessions/session0417.md",
     "README.md",
     "PATTERNS.md",
     "DOMAIN.md",
     "CHECKLIST.md",
     "08_PHASE_DASHBOARD.md",
-    "07_PHASE_BOT.md",
-    "06_PHASE_STRATEGIES.md",
-    "00_OVERALL_PLAN.md"
+    "07_PHASE_BOT.md"
   ]
 }

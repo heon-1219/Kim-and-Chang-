@@ -250,6 +250,20 @@ def _bar_html(label: str, pct: float, note: str = "") -> str:
         f'</div>'
     )
 
+@st.cache_data(ttl=10)
+def _cached_account():
+    """Streamlit reruns the script on every interaction; cache for ~10 s so
+    rapid clicks don't each fire a fresh broker.get_account() call."""
+    return broker.get_account()
+
+
+@st.cache_data(ttl=10)
+def _cached_all_positions():
+    """Same idea as _cached_account — short TTL so the positions panel
+    doesn't hammer Alpaca on every rerun while still feeling live."""
+    return broker.get_all_positions()
+
+
 @st.cache_data(ttl=60)
 def _portfolio_history(period: str = "1D", timeframe: str = "1D") -> pd.DataFrame | None:
     """
@@ -817,7 +831,7 @@ trades  = _demo_trades() if DEMO else db.get_recent_trades(limit=50)
 logs    = _demo_logs()   if DEMO else db.get_recent_logs(limit=500)
 
 try:
-    ac   = _demo_account() if DEMO else broker.get_account()
+    ac   = _demo_account() if DEMO else _cached_account()
     eq   = float(ac.equity)
     cash = float(ac.cash)
     bp   = float(ac.buying_power)
@@ -1072,7 +1086,7 @@ with main_right:
         """)
         # Build Alpaca position price map
         try:
-            _raw_pos = _demo_positions() if DEMO else broker.get_all_positions()
+            _raw_pos = _demo_positions() if DEMO else _cached_all_positions()
             pos_map  = {p.symbol: p for p in _raw_pos}
         except Exception:
             pos_map = {}

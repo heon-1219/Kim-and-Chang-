@@ -55,6 +55,12 @@ _STRAT_CLR = {
 }
 _PIE_COLORS = ["#00c896","#4ecdc4","#f7b731","#a29bfe","#fd9644","#74b9ff","#ff6b9d","#c7ecee"]
 
+
+@st.cache_data(ttl=10)
+def _cached_all_positions():
+    """Short-TTL cache so rapid page reruns don't each refetch positions."""
+    return broker.get_all_positions()
+
 def _num_style(v) -> str:
     try:
         n = float(str(v).replace("$","").replace(",","").replace("%","").replace("+",""))
@@ -102,7 +108,7 @@ st.divider()
 
 # ── Load data ─────────────────────────────────────────────────────────────────
 try:
-    _raw_pos = _demo_positions() if DEMO else broker.get_all_positions()
+    _raw_pos = _demo_positions() if DEMO else _cached_all_positions()
     pos_map  = {p.symbol: p for p in _raw_pos}
 except Exception:
     pos_map = {}

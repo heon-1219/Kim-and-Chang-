@@ -40,23 +40,35 @@ _OPEN_PING_DONE_FOR: date | None = None
 PREMARKET_WARMUP_MIN = 30
 
 
-def get_recent_prices(symbol: str, bars_needed: int) -> pd.Series:
-    """Fetch recent 15-min close prices for a symbol."""
+def _fetch_bars_batch(symbols: list[str], bars_needed: int) -> dict[str, pd.Series]:
+    """Fetch recent 15-min closes for many symbols in a single Alpaca call.
+
+    Alpaca's StockBarsRequest accepts a list of symbols and returns one
+    response keyed by ticker — so N symbols cost 1 API call, not N.
+    Symbols with no data are returned as empty Series so callers can
+    handle them uniformly.
+    """
+    if not symbols:
+        return {}
     end = datetime.utcnow()
-    # Pull a generous window — intraday bars only cover market hours
     trading_days = max(int(bars_needed / _BARS_PER_TRADING_DAY) + 3, 3)
     start = end - timedelta(days=trading_days * 2 + 5)
     request = StockBarsRequest(
-        symbol_or_symbols=symbol,
+        symbol_or_symbols=list(symbols),
         timeframe=_INTRADAY_TF,
         start=start,
         end=end,
     )
     bars = broker.get_stock_bars(request)
-    if symbol not in bars.data:
-        return pd.Series(dtype=float)
-    closes = [bar.close for bar in bars.data[symbol]]
-    return pd.Series(closes[-bars_needed:]) if len(closes) > bars_needed else pd.Series(closes)
+    out: dict[str, pd.Series] = {}
+    for sym in symbols:
+        sym_bars = bars.data.get(sym, [])
+        closes = [b.close for b in sym_bars]
+        if len(closes) > bars_needed:
+            out[sym] = pd.Series(closes[-bars_needed:])
+        else:
+            out[sym] = pd.Series(closes, dtype=float)
+    return out
 
 
 def _daily_closes_yf(symbol: str, days: int = 180) -> pd.Series:
@@ -77,16 +89,14 @@ def calculate_quantity(equity: float, price: float, position_pct: float) -> int:
 
 def _current_prices_for(strategy_name: str) -> dict[str, float]:
     """Latest known price per symbol held by this strategy, used to value open positions."""
-    open_pos = db.get_strategy_open_positions(strategy_name)
-    prices: dict[str, float] = {}
-    for sym in open_pos:
-        try:
-            series = get_recent_prices(sym, bars_needed=1)
-            if not series.empty:
-                prices[sym] = float(series.iloc[-1])
-        except Exception:
-            continue
-    return prices
+    open_pos = list(db.get_strategy_open_positions(strategy_name))
+    if not open_pos:
+        return {}
+    try:
+        bars_by_sym = _fetch_bars_batch(open_pos, bars_needed=1)
+    except Exception:
+        return {}
+    return {sym: float(s.iloc[-1]) for sym, s in bars_by_sym.items() if not s.empty}
 
 
 def _notify_trade(strategy_name: str, symbol: str, side: str, qty: float,
@@ -169,21 +179,23 @@ def place_sell(symbol: str, held_qty: float, current_price: float,
         notifications.send_alert(f"SELL {symbol} failed: {e}", "error")
 
 
-def process_symbol(symbol: str, settings: dict,
+def process_symbol(symbol: str, prices: pd.Series, settings: dict,
                    strategy_name: str, alloc_pct: float, alloc_usd: float,
                    account) -> None:
-    """Run one strategy on one symbol and act on its signal."""
+    """Run one strategy on one symbol and act on its signal.
+
+    `prices` is the pre-fetched 15-min close series for `symbol` (shared
+    across strategies in a single batched fetch — see run_one_cycle).
+    """
     strategy = STRATEGIES.get(strategy_name)
     if not strategy:
         db.log("ERROR", f"Unknown strategy: {strategy_name}")
         return
 
-    # Strategy-defined lookback is in "days"; convert to intraday bars
     lookback_days = strategy.required_lookback_days(settings)
-    bars_needed   = lookback_days * _BARS_PER_TRADING_DAY
-    prices        = get_recent_prices(symbol, bars_needed=bars_needed)
     if len(prices) < max(lookback_days, 30):
-        db.log("WARN", f"{strategy_name}/{symbol}: only {len(prices)} bars, need ~{bars_needed}")
+        db.log("WARN", f"{strategy_name}/{symbol}: only {len(prices)} bars, "
+                       f"need ~{lookback_days * _BARS_PER_TRADING_DAY}")
         return
 
     current_price = float(prices.iloc[-1])
@@ -360,22 +372,44 @@ def run_one_cycle() -> None:
            f"Cycle start. strategies={[n for n, _, _ in active_strategies]}, "
            f"manual_symbols={manual_symbols}")
 
-    for strategy_name, alloc_pct, alloc_usd in active_strategies:
+    # Build per-strategy symbol lists and the union across strategies, plus
+    # the largest lookback any active strategy needs. This lets us do a
+    # single batched bar fetch instead of one Alpaca call per (strategy, symbol).
+    per_strategy_symbols: dict[str, list[str]] = {}
+    union_symbols: list[str] = []
+    union_seen: set[str] = set()
+    max_bars_needed = 0
+    for strategy_name, _alloc_pct, _alloc_usd in active_strategies:
         picks = _picks_for(strategy_name, settings)
-        # Union of picks + manual, preserving picks first
         seen: set[str] = set()
         symbols: list[str] = []
         for s in list(picks) + manual_symbols:
             if s not in seen:
                 symbols.append(s)
                 seen.add(s)
+            if s not in union_seen:
+                union_symbols.append(s)
+                union_seen.add(s)
+        per_strategy_symbols[strategy_name] = symbols
+        bars_needed = STRATEGIES[strategy_name].required_lookback_days(settings) * _BARS_PER_TRADING_DAY
+        if bars_needed > max_bars_needed:
+            max_bars_needed = bars_needed
 
+    try:
+        bars_by_symbol = _fetch_bars_batch(union_symbols, max_bars_needed)
+    except Exception as e:
+        db.log("ERROR", f"Batched bar fetch failed: {e}\n{traceback.format_exc()}")
+        return
+
+    for strategy_name, alloc_pct, alloc_usd in active_strategies:
+        symbols = per_strategy_symbols[strategy_name]
         db.log("INFO",
                f"--- {strategy_name.upper()} ({alloc_pct:.1f}% of equity, "
                f"${alloc_usd:,.0f}) on {len(symbols)} symbols ---")
         for symbol in symbols:
+            prices = bars_by_symbol.get(symbol, pd.Series(dtype=float))
             try:
-                process_symbol(symbol, settings, strategy_name,
+                process_symbol(symbol, prices, settings, strategy_name,
                                alloc_pct, alloc_usd, account)
             except Exception as e:
                 db.log("ERROR", f"{strategy_name}/{symbol}: {e}\n{traceback.format_exc()}")
