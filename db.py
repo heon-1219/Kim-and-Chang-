@@ -41,6 +41,22 @@ def init_db() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_trades_time ON trades(timestamp DESC);
 
+            CREATE TABLE IF NOT EXISTS order_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp DATETIME NOT NULL,
+                symbol TEXT NOT NULL,
+                side TEXT NOT NULL,
+                quantity REAL NOT NULL,
+                requested_price REAL,
+                simulated_price REAL,
+                estimated_value REAL,
+                alpaca_order_id TEXT,
+                status TEXT,
+                strategy TEXT,
+                notes TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_order_requests_time ON order_requests(timestamp DESC);
+
             CREATE TABLE IF NOT EXISTS bot_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp DATETIME NOT NULL,
@@ -131,6 +147,51 @@ def log_trade(symbol: str, side: str, quantity: float,
              actual_price, simulated_price, order_id, strategy, notes),
         )
         conn.commit()
+
+
+def log_order_request(symbol: str, side: str, quantity: float,
+                      requested_price: float | None = None,
+                      simulated_price: float | None = None,
+                      order_id: str = None, status: str = None,
+                      strategy: str = None, notes: str = None) -> None:
+    estimated_value = None
+    if requested_price is not None:
+        estimated_value = float(quantity) * float(requested_price)
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO order_requests
+               (timestamp, symbol, side, quantity, requested_price, simulated_price,
+                estimated_value, alpaca_order_id, status, strategy, notes)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (datetime.utcnow().isoformat(), symbol, side, quantity,
+             requested_price, simulated_price, estimated_value, order_id,
+             status, strategy, notes),
+        )
+        conn.commit()
+
+
+def get_recent_order_requests(limit: int = 50) -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM order_requests ORDER BY timestamp DESC LIMIT ?", (limit,)
+        ).fetchall()
+        if rows:
+            return [dict(r) for r in rows]
+        legacy = conn.execute(
+            """SELECT id, timestamp, symbol, side, quantity,
+                      actual_price AS requested_price,
+                      simulated_price,
+                      quantity * actual_price AS estimated_value,
+                      alpaca_order_id,
+                      'logged' AS status,
+                      strategy,
+                      notes
+               FROM trades
+               ORDER BY timestamp DESC
+               LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in legacy]
 
 
 def get_strategy_holding(symbol: str, strategy: str) -> float:
@@ -266,6 +327,18 @@ def get_recent_logs(limit: int = 100) -> list[dict]:
     with get_conn() as conn:
         rows = conn.execute(
             "SELECT * FROM bot_log ORDER BY timestamp DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_logs_for_window(start: datetime, end: datetime, limit: int = 2000) -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT * FROM bot_log
+               WHERE timestamp >= ? AND timestamp < ?
+               ORDER BY timestamp DESC
+               LIMIT ?""",
+            (start.isoformat(), end.isoformat(), limit),
         ).fetchall()
         return [dict(r) for r in rows]
 

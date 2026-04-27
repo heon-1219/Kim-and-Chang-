@@ -5,11 +5,15 @@ Reached via st.switch_page() from the main dashboard.
 
 from __future__ import annotations
 
+from datetime import date, datetime, timedelta
+
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
 import db
+
+db.init_db()
 
 st.set_page_config(
     page_title="Bot Logs — KC Trading",
@@ -81,7 +85,10 @@ def _demo_trades():
     ]
 
 # ── Load data ─────────────────────────────────────────────────────────────────
-raw_logs   = _demo_logs()   if DEMO else db.get_recent_logs(limit=2000)
+log_day = st.date_input("Log date (UTC)", value=date.today())
+log_start = datetime.combine(log_day, datetime.min.time())
+log_end = log_start + timedelta(days=1)
+raw_logs   = _demo_logs()   if DEMO else db.get_logs_for_window(log_start, log_end, limit=5000)
 raw_trades = _demo_trades() if DEMO else db.get_recent_trades(limit=500)
 
 # ── Header ────────────────────────────────────────────────────────────────────

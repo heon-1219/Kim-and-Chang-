@@ -12,6 +12,8 @@ import plotly.graph_objects as go
 import db
 from strategies import STRATEGIES
 
+db.init_db()
+
 st.set_page_config(
     page_title="Open Positions — KC Trading",
     page_icon="💼",
@@ -268,8 +270,10 @@ for tab, strat_key in zip(tabs, STRAT_KEYS):
                     qty = db.get_strategy_holding(sym, strat_key)
                     if qty > 0:
                         p = pos_map.get(sym)
-                        avg_entry = float(p.avg_entry_price) if p else 0.0
-                        price     = float(p.current_price)   if p else 0.0
+                        if p is None:
+                            continue
+                        avg_entry = float(p.avg_entry_price)
+                        price     = float(p.current_price)
                         mkt_val   = qty * price
                         pnl       = qty * (price - avg_entry) if avg_entry else 0.0
                         pnl_pct   = (pnl / (qty * avg_entry) * 100) if avg_entry else 0.0
@@ -348,3 +352,23 @@ for tab, strat_key in zip(tabs, STRAT_KEYS):
                                  hide_index=True, height=200)
             else:
                 st.caption(f"No active {(strat_key or '').upper()} positions.")
+
+st.divider()
+st.markdown("**Submitted Orders**")
+order_rows = [] if DEMO else db.get_recent_order_requests(limit=100)
+if order_rows:
+    df_o = pd.DataFrame(order_rows)
+    cols_o = [c for c in [
+        "timestamp", "strategy", "symbol", "side", "quantity",
+        "requested_price", "estimated_value", "status", "notes", "alpaca_order_id"
+    ] if c in df_o.columns]
+    fmt_o = {
+        "quantity": "{:.0f}",
+        "requested_price": "${:.2f}",
+        "estimated_value": "${:,.2f}",
+    }
+    st.dataframe(
+        df_o[cols_o].style.format(fmt_o, na_rep="-"),
+        use_container_width=True, hide_index=True, height=260)
+else:
+    st.caption("No submitted orders recorded yet.")

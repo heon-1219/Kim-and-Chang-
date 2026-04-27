@@ -116,8 +116,9 @@ def _fetch_bars_batch(symbols: list[str], bars_needed: int) -> dict[str, pd.Seri
 
 def _daily_closes_yf(symbol: str, days: int = 180) -> pd.Series:
     """Fetch daily closes via yfinance — used by the picker to rank the universe."""
+    yf_symbol = symbol.replace(".", "-")
     try:
-        hist = yf.Ticker(symbol).history(period=f"{days}d", auto_adjust=True)
+        hist = yf.Ticker(yf_symbol).history(period=f"{days}d", auto_adjust=True)
         if hist.empty:
             return pd.Series(dtype=float)
         return hist["Close"].dropna().reset_index(drop=True)
@@ -128,6 +129,11 @@ def _daily_closes_yf(symbol: str, days: int = 180) -> pd.Series:
 def calculate_quantity(equity: float, price: float, position_pct: float) -> int:
     """Integer shares that fit within position_pct of the given equity slice."""
     return max(int(equity * (position_pct / 100.0) / price), 0)
+
+
+def _order_status(order) -> str:
+    status = getattr(order, "status", "submitted")
+    return str(getattr(status, "value", status))
 
 
 def _current_prices_for(strategy_name: str,
@@ -227,6 +233,20 @@ def _update_dashboard_snapshots(account) -> None:
             pass
 
 
+def _update_dashboard_account_positions() -> None:
+    """Refresh account and positions after possible order submissions."""
+    try:
+        db.set_snapshot("account", _serialize_account(broker.get_account(force=True)))
+    except Exception as e:
+        db.log("WARN", f"snapshot[account post-cycle] failed: {e}")
+
+    try:
+        positions = broker.get_all_positions(force=True)
+        db.set_snapshot("positions", _serialize_positions(positions))
+    except Exception as e:
+        db.log("WARN", f"snapshot[positions post-cycle] failed: {e}")
+
+
 def _make_position_resolver():
     """Lazy single-shot get_all_positions per cycle.
 
@@ -270,6 +290,12 @@ def place_buy(symbol: str, current_price: float, settings: dict,
             symbol=symbol, qty=qty,
             side=OrderSide.BUY, time_in_force=TimeInForce.DAY,
         ))
+        db.log_order_request(
+            symbol=symbol, side="buy", quantity=qty,
+            requested_price=current_price, simulated_price=simulated_price,
+            order_id=str(order.id), status=_order_status(order),
+            strategy=strategy_name, notes="signal: buy",
+        )
         db.log_trade(
             symbol=symbol, side="buy", quantity=qty,
             actual_price=current_price, simulated_price=simulated_price,
@@ -309,6 +335,12 @@ def place_sell(symbol: str, held_qty: float, current_price: float,
             symbol=symbol, qty=qty,
             side=OrderSide.SELL, time_in_force=TimeInForce.DAY,
         ))
+        db.log_order_request(
+            symbol=symbol, side="sell", quantity=qty,
+            requested_price=current_price, simulated_price=simulated_price,
+            order_id=str(order.id), status=_order_status(order),
+            strategy=strategy_name, notes="signal: sell",
+        )
         db.log_trade(
             symbol=symbol, side="sell", quantity=qty,
             actual_price=current_price, simulated_price=simulated_price,
@@ -354,9 +386,13 @@ def process_symbol(symbol: str, prices: pd.Series, settings: dict,
     if sig == "buy" and not has_position:
         place_buy(symbol, current_price, settings, strategy_name, alloc_pct, alloc_usd,
                   account, bars_by_symbol)
+    elif sig == "buy" and has_position:
+        db.log("INFO", f"{strategy_name}/{symbol}: buy signal ignored; already held")
     elif sig == "sell" and has_position:
         place_sell(symbol, held_qty, current_price, settings, strategy_name, alloc_usd,
                    bars_by_symbol, resolve_position)
+    elif sig == "sell":
+        db.log("INFO", f"{strategy_name}/{symbol}: sell signal ignored; no strategy position")
 
 
 def _load_active_strategies(settings: dict, account_equity: float) -> list[tuple[str, float, float]]:
@@ -599,6 +635,7 @@ def run_one_cycle() -> None:
             except Exception as e:
                 db.log("ERROR", f"{strategy_name}/{symbol}: {e}\n{traceback.format_exc()}")
 
+    _update_dashboard_account_positions()
     db.log("INFO", "Cycle complete.")
 
 
