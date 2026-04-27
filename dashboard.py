@@ -1,6 +1,6 @@
 """
-Kim and Chang Trading Technologies ??Streamlit Dashboard
-Clean professional layout. Paper trading only ??never places real orders.
+Kim and Chang Trading Technologies - Streamlit Dashboard
+Clean professional layout. Paper trading only - never places real orders.
 """
 
 from __future__ import annotations
@@ -64,7 +64,7 @@ def _check_login() -> bool:
                 else:
                     st.error("Invalid credentials.")
         st.markdown('<div style="height:6px;"></div>', unsafe_allow_html=True)
-        if st.button("??? View as Guest", use_container_width=True, key="guest_btn"):
+        if st.button("\U0001f441  View as Guest", use_container_width=True, key="guest_btn"):
             st.session_state.update({"authenticated": True, "demo": False,
                                      "guest": True, "username": "guest"})
             st.rerun()
@@ -201,7 +201,7 @@ _STRAT_CLR = {
 
 def _panel_header(title: str, help_md: str = "", panel_key: str = "",
                   page_link: str = "") -> bool:
-    """Section title with optional ??popover and ??expand/navigate toggle."""
+    """Section title with optional help popover and expand/navigate toggle."""
     _t = (f'<p style="font-size:0.7rem;font-weight:600;letter-spacing:0.1em;'
           f'color:#00d4aa;text-transform:uppercase;margin:0 0 4px;">{title}</p>')
     state_key = f"_fsstate_{panel_key}"
@@ -209,11 +209,11 @@ def _panel_header(title: str, help_md: str = "", panel_key: str = "",
 
     def _expand_btn():
         if page_link:
-            if st.button("Open", key=f"fs_{panel_key}", use_container_width=True,
+            if st.button("\u2197", key=f"fs_{panel_key}", use_container_width=True,
                          help="Open full analytics page"):
                 st.switch_page(page_link)
         else:
-            if st.button("Less" if expanded else "More", key=f"fs_{panel_key}",
+            if st.button("\u2199" if expanded else "\u2922", key=f"fs_{panel_key}",
                          use_container_width=True,
                          help="Collapse" if expanded else "Expand"):
                 st.session_state[state_key] = not expanded
@@ -502,7 +502,7 @@ _MT_PERIOD_OPTS: dict[str, tuple] = {
 }
 
 def _stock_mini_chart(hist: pd.DataFrame, height: int = 85) -> go.Figure:
-    """Compact sparkline chart ??no axes, used in the manual trade panel."""
+    """Compact sparkline chart - no axes, used in the manual trade panel."""
     closes = hist["Close"]
     up     = float(closes.iloc[-1]) >= float(closes.iloc[0])
     clr    = "#00c896" if up else "#ff4b4b"
@@ -693,7 +693,7 @@ def _trades_fig(trades: list, strategy_filter: list[str] | None,
                 marker_line=dict(color=color, width=1),
                 customdata=cd,
                 hovertemplate=(
-                    f"<b>%{{customdata[0]}}</b> ??{name}<br>"
+                    f"<b>%{{customdata[0]}}</b> - {name}<br>"
                     "Qty: <b>%{y:.0f}</b><br>"
                     "Price: $%{customdata[1]:.2f}<br>"
                     "Strategy: %{customdata[2]}<br>"
@@ -706,7 +706,7 @@ def _trades_fig(trades: list, strategy_filter: list[str] | None,
                             line=dict(color="#0a0e1a", width=1)),
                 customdata=cd,
                 hovertemplate=(
-                    f"<b>%{{customdata[0]}}</b> ??{name}<br>"
+                    f"<b>%{{customdata[0]}}</b> - {name}<br>"
                     "Qty: <b>%{y:.0f}</b><br>"
                     "Price: $%{customdata[1]:.2f}<br>"
                     "Strategy: %{customdata[2]}<br>"
@@ -771,7 +771,7 @@ def _demo_trades():
 def _demo_logs():
     return [
         {"timestamp":"2026-04-18 09:00","level":"INFO", "message":"Bot cycle started"},
-        {"timestamp":"2026-04-18 08:55","level":"INFO", "message":"RSI: AAPL ??hold"},
+        {"timestamp":"2026-04-18 08:55","level":"INFO", "message":"RSI: AAPL - hold"},
         {"timestamp":"2026-04-18 08:50","level":"WARN", "message":"API rate limit approaching: 178/200"},
         {"timestamp":"2026-04-17 15:30","level":"ERROR","message":"Order rejected: insufficient buying power"},
         {"timestamp":"2026-04-17 14:32","level":"INFO", "message":"BUY AAPL qty=10 @ $171.42"},
@@ -819,14 +819,14 @@ _BT_HELP = """
 1. Enter one or more symbols (e.g. `AAPL` or `AAPL, MSFT, GOOGL`), choose a strategy,
    set a date range and starting capital. For multi-symbol runs the capital is split
    evenly and the strategy runs independently per symbol.
-2. Pick a **Bar interval** ??daily for swing testing, or intraday (1m??h) for
+2. Pick a **Bar interval** - daily for swing testing, or intraday (1m-1h) for
    high-frequency testing. Intraday data has yfinance window caps:
-   ??**1m** ??last 7 days ??**5/15/30m** ??last 60 days ??**1h** ??last 730 days.
+   - **1m**: last 7 days - **5/15/30m**: last 60 days - **1h**: last 730 days.
 3. Click **Run Backtest**. Results appear below. Data sourced from Yahoo Finance (free).
 4. A dashed grey **Buy & Hold** line shows what holding the same basket passively would have returned.
 5. Click **Add to comparison** to store a result, then run another backtest to compare curves.
 6. Click **Clear** to reset stored comparisons.
-7. Click the **??* top-right to enter fullscreen for a much larger chart; **??* to collapse.
+7. Click the top-right expand icon to enter the detailed view; click collapse to return.
 """
 
 _BT_INTERVALS: dict[str, str] = {
@@ -847,10 +847,10 @@ def _render_backtest_panel(chart_height: int) -> None:
     """Render the full Backtest panel contents. The surrounding bordered
     container and the _panel_header should already be set by the caller."""
     if DEMO:
-        st.info("Demo mode ??backtesting requires live API access.")
+        st.info("Demo mode - backtesting requires live API access.")
         return
     if GUEST:
-        st.info("???View-only mode ??sign in to run backtests.")
+        st.info("\U0001f441 View-only mode - sign in to run backtests.")
         return
 
     b1, b2 = st.columns([3, 2])
@@ -864,7 +864,7 @@ def _render_backtest_panel(chart_height: int) -> None:
     b3, b4, b5 = st.columns([1, 1, 1.2])
     with b3: bt_interval_lbl = st.selectbox(
         "Bar interval", list(_BT_INTERVALS.keys()), index=0,
-        help="Daily for swing, 1m??h for high-frequency. Intraday has history caps.")
+        help="Daily for swing, 1m-1h for high-frequency. Intraday has history caps.")
     bt_interval = _BT_INTERVALS[bt_interval_lbl]
     # Default end date is today for all intervals; default start shortens for HFT
     # so we land inside the yfinance window.
@@ -877,7 +877,7 @@ def _render_backtest_panel(chart_height: int) -> None:
     cap_bt = st.number_input("Starting capital ($)", value=100_000, step=10_000)
 
     # Per-strategy parameter overrides for this backtest run
-    with st.expander("??Strategy Parameters", expanded=False):
+    with st.expander("\u2699 Strategy Parameters", expanded=False):
         if strat_bt == "rsi":
             pc1,pc2,pc3 = st.columns(3)
             with pc1: bt_rsi_p  = st.number_input("RSI Period",  2,   50, int(cfg.get("rsi_period",    "14")),          key="bt_rsi_p")
@@ -916,16 +916,16 @@ def _render_backtest_panel(chart_height: int) -> None:
 
     run_c, add_c, tg_c, clr_c = st.columns([2, 1, 1, 1])
     with run_c:
-        run_bt = st.button("?? Run Backtest", type="primary", use_container_width=True)
+        run_bt = st.button("\u25b6 Run Backtest", type="primary", use_container_width=True)
     with add_c:
-        add_bt = st.button("??Compare", use_container_width=True,
+        add_bt = st.button("\u2295 Compare", use_container_width=True,
                            disabled="bt" not in st.session_state)
     with tg_c:
-        send_tg = st.button("???Telegram", use_container_width=True,
+        send_tg = st.button("\u2709 Telegram", use_container_width=True,
                             disabled="bt" not in st.session_state,
                             help="Send the latest backtest summary to Telegram")
     with clr_c:
-        if st.button("??Clear", use_container_width=True):
+        if st.button("\u2715 Clear", use_container_width=True):
             st.session_state.pop("bt", None)
             st.session_state.pop("bt_compare", None)
             st.rerun()
@@ -1057,9 +1057,9 @@ _data_stale = _acct_age_s is not None and _acct_age_s > 600  # >10 min
 if hb:
     age_min = int((now_utc - datetime.fromisoformat(hb["last_beat"])).total_seconds() / 60)
     alive   = (now_utc - datetime.fromisoformat(hb["last_beat"])) < timedelta(minutes=70)
-    bot_lbl = ("???ALIVE" if alive else "???STALE") + f" ({age_min}m ago)"
+    bot_lbl = ("\u25cf ALIVE" if alive else "\u25cf STALE") + f" ({age_min}m ago)"
 else:
-    alive, bot_lbl = False, "??Not started"
+    alive, bot_lbl = False, "\u25cb Not started"
 
 on    = cfg.get("trading_enabled","true").lower() == "true"
 api_n = 0 if DEMO else db.count_recent_api_calls(60)
@@ -1102,9 +1102,9 @@ else:
 
 _api_details_html = (
     f'<details class="kc-api-details">'
-    f'<summary style="color:{_api_color};">??{_api_label}</summary>'
+    f'<summary style="color:{_api_color};">&#9662; {_api_label}</summary>'
     f'<div class="kc-api-pop">'
-    f'<div class="kc-api-pop-title">Last 60s ??per endpoint</div>'
+    f'<div class="kc-api-pop-title">Last 60s - per endpoint</div>'
     f'{_api_rows}'
     f'</div>'
     f'</details>'
@@ -1118,7 +1118,7 @@ with left_hdr:
         f'<span style="color:#1e3a5f;">|</span>'
         f'<span style="font-size:0.72rem;color:#6b8bb0;">{bot_lbl}</span>'
         f'<span style="font-size:0.72rem;color:{"#00c896" if on else "#ff4b4b"};">'
-        f'{"???Trading ON" if on else "???Halted"}</span>'
+        f'{"\u25cf Trading ON" if on else "\u25cf Halted"}</span>'
         f'<span style="font-size:0.72rem;color:#6b8bb0;">'
         f'<b style="color:#e2e8f0;">{n_active_strats}</b> '
         f'{"strategy" if n_active_strats == 1 else "strategies"} active</span>'
@@ -1148,11 +1148,11 @@ with right_hdr:
     with a_col:
         auto_refresh = st.toggle("Auto", value=False, help="Refresh dashboard every 60 seconds.")
     with r_col:
-        if st.button("Refresh", help="Refresh", use_container_width=True):
+        if st.button("\u21bb", help="Refresh", use_container_width=True):
             st.session_state["_force_account_refresh"] = True
             st.cache_data.clear(); st.rerun()
     with l_col:
-        if st.button("Sign out", help="Sign out", use_container_width=True):
+        if st.button("\u23fb", help="Sign out", use_container_width=True):
             st.session_state.clear(); st.rerun()
 
 if "auto_refresh" in locals() and auto_refresh and not BT_FULL:
@@ -1179,7 +1179,7 @@ if BT_FULL:
         st.markdown(
             '<div style="position:fixed;bottom:12px;right:16px;font-size:0.7rem;'
             'color:#ffa500;background:#0a0e1a;padding:4px 10px;'
-            'border:1px solid #ffa50055;border-radius:4px;">???GUEST MODE</div>',
+            'border:1px solid #ffa50055;border-radius:4px;">\U0001f441 GUEST MODE</div>',
             unsafe_allow_html=True)
     st.stop()
 
@@ -1187,14 +1187,14 @@ if BT_FULL:
 
 if not BT_FULL:
     st.markdown("""<div class="kc-nav">
-  <a href="#equity">???Equity</a>
-  <a href="#trades">???Trades</a>
-  <a href="#positions">???Positions</a>
-  <a href="#server">???Server</a>
-  <a href="#logs">???Logs</a>
-  <a href="#backtest">???Backtest</a>
-  <a href="#manual">??Manual</a>
-  <a href="#config">??????Config</a>
+  <a href="#equity">&#128200; Equity</a>
+  <a href="#trades">&#128202; Trades</a>
+  <a href="#positions">&#128188; Positions</a>
+  <a href="#server">&#128421; Server</a>
+  <a href="#logs">&#128203; Logs</a>
+  <a href="#backtest">&#128300; Backtest</a>
+  <a href="#manual">&#9995; Manual</a>
+  <a href="#config">&#9881; Config</a>
 </div>""", unsafe_allow_html=True)
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Portfolio Balance",  f"${eq:,.2f}")
@@ -1212,14 +1212,14 @@ with main_left:
     with st.container(border=True):
         eq_expanded = _panel_header("Portfolio Equity", panel_key="equity", help_md="""
 **How to use:**
-- Each dropdown option sets the **bar size** ??"1 Min" means each point on the chart
+- Each dropdown option sets the **bar size** - "1 Min" means each point on the chart
   represents one minute, "1 Day" means each point is one trading day, and so on.
   The chart always shows a sensible span for that bar size (e.g. 1-min bars = today,
   1-day bars = last year).
 - Select one or more strategies below to overlay trade markers on the chart.
 - This chart shows *total* portfolio equity sourced from Alpaca.
         """)
-        # bar_size ??(alpaca_period, alpaca_timeframe, resample_rule).
+        # bar_size -> (alpaca_period, alpaca_timeframe, resample_rule).
         # Each bar on the chart represents `bar_size`. `resample_rule` (pandas)
         # is applied when Alpaca doesn't natively offer that bar size.
         PERIOD_OPTS: dict[str, tuple] = {
@@ -1310,7 +1310,7 @@ with main_left:
         all_strats = sorted({t.get("strategy","?") for t in trades} if trades else [])
         buys  = sum(1 for t in trades if t.get("side") == "buy")  if trades else 0
         sells = sum(1 for t in trades if t.get("side") == "sell") if trades else 0
-        tr_expanded = _panel_header(f"Trade Activity ??{buys} buy ??{sells} sell",
+        tr_expanded = _panel_header(f"Trade Activity - {buys} buy / {sells} sell",
                                     panel_key="trades", help_md="""
 **How to use:**
 - Each bar represents one paper trade (green = buy, red = sell).
@@ -1373,7 +1373,7 @@ with main_left:
             'color:#00d4aa;text-transform:uppercase;margin:0 0 8px;">'
             'Market Snapshot '
             '<span style="color:#4a6a90;font-weight:400;letter-spacing:0;">'
-            '??indices + Mag 7 ??daily %</span></p></div>',
+            '- indices + Mag 7 - daily %</span></p></div>',
             unsafe_allow_html=True)
         all_syms = tuple(s for s, _ in _MARKET_INDICES) + tuple(s for s, _ in _MAG7)
         snaps = _ticker_snapshots(all_syms)
@@ -1413,7 +1413,7 @@ with main_right:
 **How to use:**
 - Tabs show positions owned by each strategy (tracked via trade log).
 - **All** tab shows every open Alpaca position with full P&L.
-- Click ??to open the full analytics page (charts, P&L breakdown, trade history).
+- Click the open icon to open the full analytics page (charts, P&L breakdown, trade history).
         """)
         # Build Alpaca position price map
         try:
@@ -1519,7 +1519,7 @@ with main_right:
                     '<div style="display:flex;align-items:center;gap:6px;'
                     'padding:6px 10px;margin-top:4px;background:rgba(0,200,150,0.08);'
                     'border:1px solid rgba(0,200,150,0.3);border-radius:4px;">'
-                    '<span style="color:#00c896;font-size:0.85rem;">??/span>'
+                    '<span style="color:#00c896;font-size:0.85rem;">&#10003;</span>'
                     '<span style="color:#00c896;font-size:0.7rem;letter-spacing:0.04em;">'
                     'No safety events</span></div>',
                     unsafe_allow_html=True)
@@ -1530,10 +1530,10 @@ with main_right:
         _panel_header("Logs", panel_key="logs",
                       page_link="pages/log.py", help_md="""
 **How to read:**
-- **INFO** (grey) ??routine status messages, including manual orders and kill-switch toggles.
-- **WARN** (amber) ??non-critical warnings (e.g. rate limit approaching).
-- **ERROR** (red) ??failures that need attention.
-- Click ??to open the full log page (search, filters, trade summary, signal events).
+- **INFO** (grey) - routine status messages, including manual orders and kill-switch toggles.
+- **WARN** (amber) - non-critical warnings (e.g. rate limit approaching).
+- **ERROR** (red) - failures that need attention.
+- Click the open icon to open the full log page (search, filters, trade summary, signal events).
         """)
         log_day = st.date_input("Log date (UTC)", value=date.today(), key="dashboard_log_day")
         log_start = datetime.combine(log_day, datetime.min.time())
@@ -1550,21 +1550,21 @@ with main_right:
         else:
             st.caption("No log entries yet.")
 
-    # ???? Manual Trade (No Strategy) ??now lives in the right column under Logs
+    # ???? Manual Trade (No Strategy) - now lives in the right column under Logs
     st.markdown('<div id="manual"></div>', unsafe_allow_html=True)
     with st.container(border=True):
-        _panel_header("Manual Trade ??No Strategy", help_md="""
+        _panel_header("Manual Trade - No Strategy", help_md="""
 **How to use:**
 - Search any symbol (e.g. TSLA) and set the quantity.
-- Choose Buy or Sell, then click **Order(??**.
+- Choose Buy or Sell, then click the order button.
 - This places a paper market order that executes at market price.
 - Orders placed here are logged as "manual" and appear in the Manual tab of Open Positions.
-- **Paper trading only** ??no real money is ever used.
+- **Paper trading only** - no real money is ever used.
         """)
         if DEMO:
-            st.info("Demo mode ??manual orders are disabled.")
+            st.info("Demo mode - manual orders are disabled.")
         elif GUEST:
-            st.info("???View-only mode ??sign in with an account to place orders.")
+            st.info("\U0001f441 View-only mode - sign in with an account to place orders.")
         else:
             mt1, mt2, mt3 = st.columns([1.5, 0.9, 1.3])
             with mt1:
@@ -1598,7 +1598,7 @@ with main_right:
                     st.plotly_chart(_stock_mini_chart(info["hist"], height=70),
                                     use_container_width=True, config=_NO_TB)
                 else:
-                    st.caption(f"No data for **{mt_sym}** ??check the ticker symbol.")
+                    st.caption(f"No data for **{mt_sym}** - check the ticker symbol.")
 
             if mt_price is not None:
                 btn_label = f"Order (${mt_price * mt_qty:,.2f})"
@@ -1641,7 +1641,7 @@ with main_right:
                                + (f" @ ${fill_price:,.2f}" if fill_price else "")
                                + f" (user={uname})")
                         st.success(
-                            f"Paper order submitted ??{mt_side.upper()} {mt_qty}??{mt_sym}"
+                            f"Paper order submitted - {mt_side.upper()} {mt_qty} x {mt_sym}"
                             + (f" @ ${fill_price:,.2f}" if fill_price else "")
                         )
                         # The next bot cycle will refresh the positions /
@@ -1658,19 +1658,19 @@ if not BT_FULL:
     with main_right.container(border=True):
         _panel_header("Configuration", help_md="""
 **How to use:**
-- **Trading enabled** ??master kill switch. Disable to halt all bot activity immediately.
-- **Strategy Allocation** ??enable one or more strategies and set a USD amount for each.
+- **Trading enabled** - master kill switch. Disable to halt all bot activity immediately.
+- **Strategy Allocation** - enable one or more strategies and set a USD amount for each.
   All enabled strategies run in parallel on every bot cycle.
-- **Strategy Parameters** ??tune each strategy's indicator settings. All four are always
+- **Strategy Parameters** - tune each strategy's indicator settings. All four are always
   editable; enabled strategies start expanded.
-- **Risk Limits** ??global caps applied across all strategies.
+- **Risk Limits** - global caps applied across all strategies.
 - Click **Save Configuration** to persist all changes immediately.
         """)
         if DEMO:
-            st.info("Demo mode ??configuration is read-only.")
+            st.info("Demo mode - configuration is read-only.")
         else:
             if GUEST:
-                st.caption("???View-only mode ??sign in to edit configuration.")
+                st.caption("\U0001f441 View-only mode - sign in to edit configuration.")
             # Trading kill switch
             en = cfg.get("trading_enabled","true").lower() == "true"
             ne = st.toggle("Trading enabled (master switch)", value=en, disabled=GUEST)
@@ -1687,12 +1687,12 @@ if not BT_FULL:
                 "Total must stay within your portfolio balance. Remainder stays as idle cash.")
 
             DESCS = {
-                "rsi":          "mean-reversion (?????ㅼ뒧???怨????",
-                "macd":         "trend-following (??????꾨굴????",
-                "bollinger":    "band breakout (???????????????二?",
+                "rsi":          "mean-reversion",
+                "macd":         "trend-following",
+                "bollinger":    "band breakout",
                 "ema_crossover":"golden/death cross",
-                "momentum":     "ROC momentum ??frequent signals",
-                "short_ma":     "fast MA crossover ??frequent signals",
+                "momentum":     "ROC momentum - frequent signals",
+                "short_ma":     "fast MA crossover - frequent signals",
             }
             max_eq = max(int(eq), 1)
 
@@ -1712,7 +1712,7 @@ if not BT_FULL:
                         f'color:#c8d6e8;white-space:nowrap;overflow:hidden;">'
                         f'<b>{strat_key.upper()}</b>'
                         f'<span style="color:#4a6a90;font-size:0.62rem;">'
-                        f' ??{DESCS.get(strat_key,"")}</span></p>',
+                        f' - {DESCS.get(strat_key,"")}</span></p>',
                         unsafe_allow_html=True)
                 with sc3:
                     st.markdown(
@@ -1733,8 +1733,8 @@ if not BT_FULL:
             zero_enabled = [k for k in enabled_strats if new_alloc[k]["alloc_usd"] == 0]
             if zero_enabled:
                 st.warning(
-                    f"??{', '.join(k.upper() for k in zero_enabled)} enabled with $0 ??"
-                    "on save these will be auto-split across the remaining idle cash, "
+                    f"{', '.join(k.upper() for k in zero_enabled)} enabled with $0 - "
+                    "on save these will be auto-split across the remaining idle cash; "
                     "otherwise the bot would skip them.")
 
             total_usd   = sum(v["alloc_usd"] for v in new_alloc.values())
@@ -1747,7 +1747,7 @@ if not BT_FULL:
             with sm1:
                 st.metric("Total allocated", f"${total_usd:,.0f}",
                           delta=(f"${idle_usd:,.0f} idle cash" if alloc_ok
-                                 else f"??Over by ${over_by:,.0f}"),
+                                 else f"Over by ${over_by:,.0f}"),
                           delta_color="normal" if alloc_ok else "inverse")
             with sm2:
                 top_n = st.number_input(
@@ -1759,7 +1759,7 @@ if not BT_FULL:
             # ???? Popovers: Strategy Parameters, Risk Limits, Save ????????????????????????????
             pv1, pv2, pv3 = st.columns([1.2, 1.2, 1])
             with pv1:
-                with st.popover("??Strategy Parameters",
+                with st.popover("\u2699 Strategy Parameters",
                                 use_container_width=True, disabled=GUEST):
                     st.caption("Tune indicator settings for each strategy. "
                                "Enabled strategies' tabs open first.")
@@ -1800,7 +1800,7 @@ if not BT_FULL:
                                 with c2: param_vals["short_ma_slow"] = st.number_input("Slow window", 5, 60, int(cfg.get("short_ma_slow",15)),  key="sma_s", disabled=GUEST)
 
             with pv2:
-                with st.popover("??Risk Limits",
+                with st.popover("\u26a0 Risk Limits",
                                 use_container_width=True, disabled=GUEST):
                     st.caption("Global caps applied across all strategies.")
                     rl1, rl2 = st.columns(2)
@@ -1829,7 +1829,7 @@ if not BT_FULL:
 
             with pv3:
                 save_clicked = st.button(
-                    "???Save", type="primary",
+                    "\u2713 Save", type="primary",
                     use_container_width=True, disabled=GUEST)
 
             if save_clicked:
@@ -1863,7 +1863,7 @@ if not BT_FULL:
                 db.set_config("max_drawdown_pct",str(mdd_r))
                 st.cache_data.clear()
                 db.log("INFO",
-                       f"[DASHBOARD] Config saved by {uname} ??"
+                       f"[DASHBOARD] Config saved by {uname} - "
                        f"strategies={enabled_strats or ['(none)']}, "
                        f"top_n={int(top_n)}")
                 st.success("Configuration saved.")
@@ -1881,5 +1881,5 @@ if GUEST:
     st.markdown(
         '<div style="position:fixed;bottom:12px;right:16px;font-size:0.7rem;'
         'color:#ffa500;background:#0a0e1a;padding:4px 10px;'
-        'border:1px solid #ffa50055;border-radius:4px;">???GUEST MODE</div>',
+        'border:1px solid #ffa50055;border-radius:4px;">\U0001f441 GUEST MODE</div>',
         unsafe_allow_html=True)
