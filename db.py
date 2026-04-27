@@ -5,7 +5,7 @@ SQLite database layer. All database access goes through this module.
 import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import config
 
@@ -328,11 +328,12 @@ def record_api_call(endpoint: str, success: bool) -> None:
 
 
 def count_recent_api_calls(seconds: int = 60) -> int:
+    cutoff = (datetime.utcnow() - timedelta(seconds=seconds)).isoformat()
     with get_conn() as conn:
         row = conn.execute(
             """SELECT COUNT(*) AS cnt FROM api_calls
-               WHERE timestamp >= datetime('now', ? || ' seconds')""",
-            (f"-{seconds}",),
+               WHERE timestamp >= ?""",
+            (cutoff,),
         ).fetchone()
         return row["cnt"]
 
@@ -388,13 +389,14 @@ def api_call_breakdown(seconds: int = 60) -> list[tuple[str, int]]:
     Used for diagnosing rate-limit pressure — the dashboard surfaces this
     next to the API counter so it's obvious which endpoint is firing.
     """
+    cutoff = (datetime.utcnow() - timedelta(seconds=seconds)).isoformat()
     with get_conn() as conn:
         rows = conn.execute(
             """SELECT endpoint, COUNT(*) AS cnt FROM api_calls
-               WHERE timestamp >= datetime('now', ? || ' seconds')
+               WHERE timestamp >= ?
                GROUP BY endpoint
                ORDER BY cnt DESC""",
-            (f"-{seconds}",),
+            (cutoff,),
         ).fetchall()
         return [(r["endpoint"], r["cnt"]) for r in rows]
 
