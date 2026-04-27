@@ -327,6 +327,23 @@ def count_recent_api_calls(seconds: int = 60) -> int:
         return row["cnt"]
 
 
+def api_call_breakdown(seconds: int = 60) -> list[tuple[str, int]]:
+    """Per-endpoint count over the last `seconds` seconds, hottest first.
+
+    Used for diagnosing rate-limit pressure — the dashboard surfaces this
+    next to the API counter so it's obvious which endpoint is firing.
+    """
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT endpoint, COUNT(*) AS cnt FROM api_calls
+               WHERE timestamp >= datetime('now', ? || ' seconds')
+               GROUP BY endpoint
+               ORDER BY cnt DESC""",
+            (f"-{seconds}",),
+        ).fetchall()
+        return [(r["endpoint"], r["cnt"]) for r in rows]
+
+
 # --- Safety events ---
 
 def record_safety_event(event_type: str, message: str, triggered_stop: bool) -> None:

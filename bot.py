@@ -29,6 +29,13 @@ from universe import get_sp500_symbols
 _INTRADAY_TF = TimeFrame(15, TimeFrameUnit.Minute)
 _BARS_PER_TRADING_DAY = 26  # 6.5 hours * 4 fifteen-minute bars
 
+# Cap on bars per symbol per cycle. The widest indicator window across active
+# strategies (MACD slow+signal+buffer) is <50, so 80 gives slack without
+# triggering Alpaca's bar-pagination amplifier — at >10k bars/request Alpaca
+# splits the response into multiple HTTP hits that each count against the
+# 200/min cap even though the SDK surface returns one value.
+_BARS_FETCH_CAP = 80
+
 # (date, {strategy_name: [symbols...]}) — rebuilt at most once per calendar day
 _PICKED_SYMBOLS: dict[str, tuple[date, list[str]]] = {}
 
@@ -51,8 +58,14 @@ def _fetch_bars_batch(symbols: list[str], bars_needed: int) -> dict[str, pd.Seri
     if not symbols:
         return {}
     end = datetime.utcnow()
-    trading_days = max(int(bars_needed / _BARS_PER_TRADING_DAY) + 3, 3)
-    start = end - timedelta(days=trading_days * 2 + 5)
+    # Pull a tight calendar window around `bars_needed`. Old math (×2 + 5) was
+    # paranoid and pushed responses past Alpaca's ~10k-bars-per-page threshold,
+    # which the SDK silently splits into multiple HTTP hits — each counted by
+    # Alpaca's 200/min limiter even though our tracker only sees one call.
+    # +3 calendar days covers a normal weekend; bars_needed itself is already
+    # capped well above any active strategy's actual indicator window.
+    trading_days = max((bars_needed // _BARS_PER_TRADING_DAY) + 1, 2)
+    start = end - timedelta(days=trading_days + 3)
     request = StockBarsRequest(
         symbol_or_symbols=list(symbols),
         timeframe=_INTRADAY_TF,
@@ -240,10 +253,10 @@ def process_symbol(symbol: str, prices: pd.Series, settings: dict,
         db.log("ERROR", f"Unknown strategy: {strategy_name}")
         return
 
-    lookback_days = strategy.required_lookback_days(settings)
-    if len(prices) < max(lookback_days, 30):
+    lookback = strategy.required_lookback_days(settings)
+    if len(prices) < max(lookback, 30):
         db.log("WARN", f"{strategy_name}/{symbol}: only {len(prices)} bars, "
-                       f"need ~{lookback_days * _BARS_PER_TRADING_DAY}")
+                       f"need ~{max(lookback, 30)}")
         return
 
     current_price = float(prices.iloc[-1])
@@ -370,15 +383,21 @@ def run_premarket_warmup(settings: dict) -> None:
     _WARMUP_DONE_FOR = today
 
 
-def _send_open_ping_once(settings: dict) -> None:
-    """Telegram 'market open — trading live' ping, exactly once per session."""
+def _send_open_ping_once(settings: dict, account=None) -> None:
+    """Telegram 'market open — trading live' ping, exactly once per session.
+
+    Caller passes the already-fetched account so we don't re-hit Alpaca just
+    to read equity. The broker cache would absorb a duplicate anyway, but
+    skipping the call keeps the rate-limit counter cleaner.
+    """
     global _OPEN_PING_DONE_FOR
     today = date.today()
     if _OPEN_PING_DONE_FOR == today:
         return
     try:
-        account = broker.get_account()
-        equity  = float(account.equity)
+        if account is None:
+            account = broker.get_account()
+        equity = float(account.equity)
     except Exception:
         equity = 0.0
     active_names = [n for n, _, _ in _load_active_strategies(settings, equity)]
@@ -397,6 +416,20 @@ def run_one_cycle() -> None:
         time.sleep(config.RATE_LIMIT_SLEEP_SECONDS)
         return
 
+    # Kill-switch check up front — purely a DB read. When the user halts trading
+    # the bot must make ZERO Alpaca calls; the original ordering still hit
+    # get_account before the safety check, burning ~12 calls/hour of nothing.
+    if settings.get("trading_enabled", "true").lower() != "true":
+        db.log("INFO", "Trading disabled by kill switch — skipping cycle")
+        return
+
+    # Same for the market-closed check — try the cached clock first so the
+    # idle-hours path stays at zero new Alpaca calls when the cache is warm.
+    clock = broker.get_clock()
+    if not clock.is_open:
+        db.log("INFO", f"Market closed. Next open: {clock.next_open}")
+        return
+
     account       = broker.get_account()
     recent_trades = db.get_recent_trades(limit=20)
 
@@ -405,13 +438,9 @@ def run_one_cycle() -> None:
         db.log("WARN", f"Safety stop: {reason}")
         return
 
-    clock = broker.get_clock()
-    if not clock.is_open:
-        db.log("INFO", f"Market closed. Next open: {clock.next_open}")
-        return
-
-    # First cycle after the bell → send Telegram "trading live" ping
-    _send_open_ping_once(settings)
+    # First cycle after the bell → send Telegram "trading live" ping.
+    # Reuse the account snapshot we just fetched.
+    _send_open_ping_once(settings, account)
 
     active_strategies = _load_active_strategies(settings, float(account.equity))
     if not active_strategies:
@@ -444,7 +473,14 @@ def run_one_cycle() -> None:
                 union_symbols.append(s)
                 union_seen.add(s)
         per_strategy_symbols[strategy_name] = symbols
-        bars_needed = STRATEGIES[strategy_name].required_lookback_days(settings) * _BARS_PER_TRADING_DAY
+        # required_lookback_days returns the indicator window in *bars* (the
+        # name is a legacy from when this codebase ran on daily data). Don't
+        # convert to bars-per-day — process_symbol's gate is `len(prices) <
+        # max(lookback, 30)` so 50–80 bars is more than enough.
+        bars_needed = min(
+            max(STRATEGIES[strategy_name].required_lookback_days(settings) + 5, 50),
+            _BARS_FETCH_CAP,
+        )
         if bars_needed > max_bars_needed:
             max_bars_needed = bars_needed
 

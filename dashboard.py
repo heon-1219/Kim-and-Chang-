@@ -250,22 +250,24 @@ def _bar_html(label: str, pct: float, note: str = "") -> str:
         f'</div>'
     )
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=120)
 def _cached_account():
-    """Streamlit reruns the script on every interaction; cache for ~30 s so
-    rapid clicks don't each fire a fresh broker.get_account() call. Account
-    snapshots feel "live" at 30 s — a tighter TTL just multiplies API load."""
+    """Streamlit reruns the script on every interaction; cache for ~120 s so
+    rapid clicks don't each fire a fresh broker.get_account() call. Even if
+    this entry is cleared by the Refresh button, broker.py keeps a 90 s
+    module-level cache so the actual Alpaca call rate stays bounded."""
     return broker.get_account()
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=120)
 def _cached_all_positions():
-    """Same idea as _cached_account — 30 s TTL keeps the positions panel
-    responsive without hammering Alpaca on every rerun."""
+    """120 s TTL — long enough that rapid reruns coalesce, short enough that
+    the positions panel still feels live. broker.get_all_positions() also has
+    its own 90 s cache shared with pages/positions.py and the bot."""
     return broker.get_all_positions()
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=600)
 def _portfolio_history(period: str = "1D", timeframe: str = "1D") -> pd.DataFrame | None:
     """
     Fetch portfolio equity history. Alpaca rejects some period/timeframe pairs
@@ -849,6 +851,9 @@ else:
 
 on    = cfg.get("trading_enabled","true").lower() == "true"
 api_n = 0 if DEMO else db.count_recent_api_calls(60)
+# Break down the count by endpoint so an over-200 spike is immediately
+# attributable. Hidden under a popover so it doesn't add visual noise.
+api_breakdown = [] if DEMO else db.api_call_breakdown(60)
 
 # Parse strategy allocations (JSON stored in db)
 _alloc_raw  = cfg.get("strategy_allocation", "{}")
@@ -906,6 +911,13 @@ with right_hdr:
     with l_col:
         if st.button("⏻", help="Sign out", use_container_width=True):
             st.session_state.clear(); st.rerun()
+
+# Diagnostic: per-endpoint API call breakdown over the last 60s. Auto-shown
+# only when we're north of the warning threshold so usual operation stays
+# uncluttered. Helps attribute a 200/min spike to a specific endpoint.
+if api_breakdown and api_n > 50:
+    parts = "  ·  ".join(f"{ep}: {cnt}" for ep, cnt in api_breakdown[:6])
+    st.caption(f"🔍 API breakdown (last 60s): {parts}")
 
 # ── Backtest fullscreen mode: render only the backtest and halt the script ──
 
@@ -1280,7 +1292,13 @@ with main_right:
                             f"Paper order submitted — {mt_side.upper()} {mt_qty}× {mt_sym}"
                             + (f" @ ${fill_price:,.2f}" if fill_price else "")
                         )
+                        # Bust caches so the positions / account panels reflect
+                        # the fill on the next render. broker.submit_order
+                        # already cleared its module-level cache; these clear
+                        # the Streamlit-layer caches stacked on top.
                         _stock_info.clear()
+                        _cached_account.clear()
+                        _cached_all_positions.clear()
                     except Exception as ex:
                         st.error(str(ex))
 
